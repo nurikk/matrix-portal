@@ -71,6 +71,13 @@ constexpr uint16_t kShakeDelta = 10000;
 constexpr uint8_t kBurnRingWidth = 2;
 constexpr uint8_t kBurnFadeStep = 18;
 constexpr uint8_t kMotionGlowFadeStep = 3;
+constexpr uint8_t kClickAxisX = 0x01;
+constexpr uint8_t kClickAxisY = 0x02;
+constexpr uint8_t kClickSignNegative = 0x08;
+constexpr uint8_t kClickEventMask = 0x30;
+constexpr uint8_t kClickDouble = 0x20;
+constexpr int16_t kKnockAxisMinimumImpulse = 6000;
+constexpr int16_t kKnockImpulseFullScale = 18000;
 
 struct Hsv {
   uint8_t h;
@@ -137,6 +144,10 @@ uint8_t pendingShakes;
 bool burnWaveActive;
 uint8_t burnRadius;
 uint8_t burnEndRadius;
+uint8_t burnCenterX;
+uint8_t burnCenterY;
+uint8_t pendingBurnCenterX;
+uint8_t pendingBurnCenterY;
 uint32_t lastAccelReadAt;
 uint32_t lastKnockAt;
 uint32_t lastShakeAt;
@@ -407,6 +418,8 @@ void configureLifeBounds() {
   panelWidth = width < kMaxWidth ? width : kMaxWidth;
   panelHeight = height < kMaxHeight ? height : kMaxHeight;
   activeMask = panelWidth == 64 ? UINT64_MAX : ((1ULL << panelWidth) - 1ULL);
+  burnCenterX = pendingBurnCenterX = panelWidth / 2;
+  burnCenterY = pendingBurnCenterY = panelHeight / 2;
 
   for (uint8_t x = 0; x < panelWidth; x++) {
     bitForX[x] = 1ULL << x;
@@ -508,6 +521,47 @@ void clearBurnHeat() {
   }
 }
 
+void recordKnockOrigin(uint8_t click, int16_t impulseX, int16_t impulseY) {
+  int16_t clickSign = (click & kClickSignNegative) ? -1 : 1;
+
+  if (click & kClickAxisX) {
+    uint16_t magnitude = abs16(impulseX);
+    if (magnitude < kKnockAxisMinimumImpulse) {
+      magnitude = kKnockAxisMinimumImpulse;
+    } else if (magnitude > kKnockImpulseFullScale) {
+      magnitude = kKnockImpulseFullScale;
+    }
+    impulseX = clickSign * static_cast<int16_t>(magnitude);
+  }
+
+  if (click & kClickAxisY) {
+    uint16_t magnitude = abs16(impulseY);
+    if (magnitude < kKnockAxisMinimumImpulse) {
+      magnitude = kKnockAxisMinimumImpulse;
+    } else if (magnitude > kKnockImpulseFullScale) {
+      magnitude = kKnockImpulseFullScale;
+    }
+    impulseY = clickSign * static_cast<int16_t>(magnitude);
+  }
+
+  if (!(click & (kClickAxisX | kClickAxisY)) &&
+      abs16(impulseX) + abs16(impulseY) < kKnockAxisMinimumImpulse) {
+    impulseX = static_cast<int16_t>(random32() % (kKnockAxisMinimumImpulse + 1)) -
+               (kKnockAxisMinimumImpulse / 2);
+    impulseY = static_cast<int16_t>(random32() % (kKnockAxisMinimumImpulse + 1)) -
+               (kKnockAxisMinimumImpulse / 2);
+  }
+
+  int16_t x = panelWidth / 2 -
+              (static_cast<int32_t>(impulseX) * panelWidth) /
+                  kKnockImpulseFullScale;
+  int16_t y = panelHeight / 2 -
+              (static_cast<int32_t>(impulseY) * panelHeight) /
+                  kKnockImpulseFullScale;
+  pendingBurnCenterX = clamp16(x, 0, panelWidth - 1);
+  pendingBurnCenterY = clamp16(y, 0, panelHeight - 1);
+}
+
 void startBurnWave() {
   pendingKnocks = 0;
   if (burnWaveActive) {
@@ -517,8 +571,10 @@ void startBurnWave() {
   burnWaveActive = true;
   burnRadius = 0;
   pendingShakes = 0;
-  int16_t centerX = panelWidth / 2;
-  int16_t centerY = panelHeight / 2;
+  burnCenterX = pendingBurnCenterX;
+  burnCenterY = pendingBurnCenterY;
+  int16_t centerX = burnCenterX;
+  int16_t centerY = burnCenterY;
   uint16_t farthestSquared = 0;
 
   for (uint8_t yCorner = 0; yCorner < 2; yCorner++) {
@@ -558,8 +614,8 @@ void stepBurnWave() {
   uint16_t nextLiveCells = 0;
   uint16_t burnedCells = 0;
   bool hasHeat = false;
-  int16_t centerX = panelWidth / 2;
-  int16_t centerY = panelHeight / 2;
+  int16_t centerX = burnCenterX;
+  int16_t centerY = burnCenterY;
   uint8_t innerRadius = burnRadius > kBurnRingWidth ? burnRadius - kBurnRingWidth : 0;
   uint8_t outerRadius = burnRadius + kBurnRingWidth;
   uint16_t killRadiusSquared = static_cast<uint16_t>(burnRadius) * burnRadius;
@@ -1109,6 +1165,8 @@ void pollAccelerometer() {
   int16_t rawX = accelerometer.x;
   int16_t rawY = accelerometer.y;
   int16_t rawZ = accelerometer.z;
+  int16_t knockImpulseX = accelerometerPrimed ? rawX - lastAccelX : 0;
+  int16_t knockImpulseY = accelerometerPrimed ? rawY - lastAccelY : 0;
 
   if (!accelerometerPrimed) {
     accelX = rawX;
@@ -1132,8 +1190,9 @@ void pollAccelerometer() {
   updateTiltState();
 
   uint8_t click = accelerometer.getClick();
-  if ((click & 0x30) && now - lastKnockAt > 120) {
-    uint8_t knocks = (click & 0x20) ? 2 : 1;
+  if ((click & kClickEventMask) && now - lastKnockAt > 120) {
+    uint8_t knocks = (click & kClickDouble) ? 2 : 1;
+    recordKnockOrigin(click, knockImpulseX, knockImpulseY);
     pendingKnocks = pendingKnocks + knocks > 8 ? 8 : pendingKnocks + knocks;
     knockEventsThisPeriod += knocks;
     lastKnockAt = now;
