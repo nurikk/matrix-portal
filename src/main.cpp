@@ -13,7 +13,7 @@ uint8_t oePin = 16;
 #define MATRIX_WIDTH 64
 #endif
 #ifndef MATRIX_BIT_DEPTH
-#define MATRIX_BIT_DEPTH 4
+#define MATRIX_BIT_DEPTH 5
 #endif
 #ifndef MATRIX_RGB_CHAINS
 #define MATRIX_RGB_CHAINS 1
