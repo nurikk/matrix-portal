@@ -9,14 +9,42 @@ uint8_t clockPin = 14;
 uint8_t latchPin = 15;
 uint8_t oePin = 16;
 
+#ifndef MATRIX_WIDTH
+#define MATRIX_WIDTH 64
+#endif
+#ifndef MATRIX_BIT_DEPTH
+#define MATRIX_BIT_DEPTH 4
+#endif
+#ifndef MATRIX_RGB_CHAINS
+#define MATRIX_RGB_CHAINS 1
+#endif
+#ifndef MATRIX_TILE
+#define MATRIX_TILE 1
+#endif
+#ifndef MATRIX_BENCHMARK
+#define MATRIX_BENCHMARK 0
+#endif
+
+constexpr uint16_t kMatrixWidth = MATRIX_WIDTH;
+constexpr uint8_t kMatrixBitDepth = MATRIX_BIT_DEPTH;
+constexpr uint8_t kMatrixRgbChains = MATRIX_RGB_CHAINS;
+constexpr int8_t kMatrixTile = MATRIX_TILE;
+constexpr uint8_t kMatrixAddrLines = 5;
+
 Adafruit_Protomatter matrix(
-    64, 4,
-    1, rgbPins,
-    5, addrPins,
+    kMatrixWidth, kMatrixBitDepth,
+    kMatrixRgbChains, rgbPins,
+    kMatrixAddrLines, addrPins,
     clockPin, latchPin, oePin,
-    false);
+    false, kMatrixTile);
 
 Adafruit_LIS3DH accelerometer = Adafruit_LIS3DH();
+
+#if !MATRIX_BENCHMARK
+
+#if MATRIX_WIDTH > 64 || MATRIX_TILE != 1 || MATRIX_RGB_CHAINS != 1
+#error "The Life firmware currently supports one 64x64 chain. Use MATRIX_BENCHMARK for larger panel timing tests."
+#endif
 
 constexpr uint8_t kMaxWidth = 64;
 constexpr uint8_t kMaxHeight = 64;
@@ -108,6 +136,47 @@ uint16_t knockEventsThisPeriod;
 uint16_t burnEventsThisPeriod;
 uint16_t shakeEventsThisPeriod;
 uint16_t tiltEventsThisPeriod;
+uint32_t profileLoopMicros;
+uint32_t profileLifeMicros;
+uint32_t profileAccelMicros;
+uint32_t profileRenderMicros;
+uint32_t profileShowMicros;
+uint32_t profileLoopMaxMicros;
+uint32_t profileLifeMaxMicros;
+uint32_t profileRenderMaxMicros;
+uint32_t profileShowMaxMicros;
+uint16_t profileSamples;
+uint16_t profileRenderSamples;
+
+void addProfile(uint32_t &total, uint32_t &maximum, uint32_t elapsed) {
+  total += elapsed;
+  if (elapsed > maximum) {
+    maximum = elapsed;
+  }
+}
+
+uint32_t averageProfile(uint32_t total, uint16_t samples) {
+  return samples ? total / samples : 0;
+}
+
+uint32_t profiledSimulationMicros() {
+  uint32_t renderAndShow = profileRenderMicros + profileShowMicros;
+  return profileLifeMicros > renderAndShow ? profileLifeMicros - renderAndShow : 0;
+}
+
+void resetProfileCounters() {
+  profileLoopMicros = 0;
+  profileLifeMicros = 0;
+  profileAccelMicros = 0;
+  profileRenderMicros = 0;
+  profileShowMicros = 0;
+  profileLoopMaxMicros = 0;
+  profileLifeMaxMicros = 0;
+  profileRenderMaxMicros = 0;
+  profileShowMaxMicros = 0;
+  profileSamples = 0;
+  profileRenderSamples = 0;
+}
 
 uint32_t random32() {
   rngState ^= rngState << 13;
@@ -379,6 +448,7 @@ Hsv targetColorFor(uint16_t index, uint8_t x, uint8_t y, bool alive) {
 }
 
 void renderFrame() {
+  uint32_t renderStartedAt = micros();
   updatedPixels = 0;
 
   for (uint8_t y = 0; y < panelHeight; y++) {
@@ -416,7 +486,14 @@ void renderFrame() {
     }
   }
 
+  uint32_t showStartedAt = micros();
   matrix.show();
+  uint32_t showEndedAt = micros();
+
+  addProfile(profileRenderMicros, profileRenderMaxMicros,
+             showStartedAt - renderStartedAt);
+  addProfile(profileShowMicros, profileShowMaxMicros, showEndedAt - showStartedAt);
+  profileRenderSamples++;
 }
 
 void clearBurnHeat() {
@@ -1098,7 +1175,27 @@ void reportFps() {
   Serial.print(" | tilt: ");
   Serial.print(tiltStrength);
   Serial.print(" | gen: ");
-  Serial.println(generation);
+  Serial.print(generation);
+  Serial.print(" | avg us loop/step/sim/render/show/accel: ");
+  Serial.print(averageProfile(profileLoopMicros, profileSamples));
+  Serial.print('/');
+  Serial.print(averageProfile(profileLifeMicros, profileSamples));
+  Serial.print('/');
+  Serial.print(averageProfile(profiledSimulationMicros(), profileSamples));
+  Serial.print('/');
+  Serial.print(averageProfile(profileRenderMicros, profileRenderSamples));
+  Serial.print('/');
+  Serial.print(averageProfile(profileShowMicros, profileRenderSamples));
+  Serial.print('/');
+  Serial.print(averageProfile(profileAccelMicros, profileSamples));
+  Serial.print(" | max us loop/life/render/show: ");
+  Serial.print(profileLoopMaxMicros);
+  Serial.print('/');
+  Serial.print(profileLifeMaxMicros);
+  Serial.print('/');
+  Serial.print(profileRenderMaxMicros);
+  Serial.print('/');
+  Serial.println(profileShowMaxMicros);
 
   fpsStartedAt = now;
   framesThisPeriod = 0;
@@ -1108,6 +1205,7 @@ void reportFps() {
   burnEventsThisPeriod = 0;
   shakeEventsThisPeriod = 0;
   tiltEventsThisPeriod = 0;
+  resetProfileCounters();
 }
 
 void setup() {
@@ -1129,6 +1227,7 @@ void setup() {
   matrix.fillScreen(0);
   matrix.show();
   seedLife();
+  resetProfileCounters();
   fpsStartedAt = millis();
   framesThisPeriod = 0;
   randomEventsThisPeriod = 0;
@@ -1146,8 +1245,152 @@ void setup() {
 }
 
 void loop() {
+  uint32_t loopStartedAt = micros();
+  uint32_t accelStartedAt = loopStartedAt;
   pollAccelerometer();
+  uint32_t lifeStartedAt = micros();
   stepLife();
-  reportFps();
+  uint32_t lifeEndedAt = micros();
   decayMotionEffects();
+  uint32_t loopEndedAt = micros();
+
+  profileAccelMicros += lifeStartedAt - accelStartedAt;
+  addProfile(profileLifeMicros, profileLifeMaxMicros, lifeEndedAt - lifeStartedAt);
+  addProfile(profileLoopMicros, profileLoopMaxMicros, loopEndedAt - loopStartedAt);
+  profileSamples++;
+  reportFps();
 }
+
+#else
+
+uint32_t benchmarkStartedAt;
+uint32_t benchmarkFrames;
+uint32_t benchmarkDrawMicros;
+uint32_t benchmarkShowMicros;
+uint32_t benchmarkLoopMicros;
+uint32_t benchmarkDrawMaxMicros;
+uint32_t benchmarkShowMaxMicros;
+uint32_t benchmarkLoopMaxMicros;
+
+void addBenchmarkTiming(uint32_t &total, uint32_t &maximum, uint32_t elapsed) {
+  total += elapsed;
+  if (elapsed > maximum) {
+    maximum = elapsed;
+  }
+}
+
+void resetBenchmarkCounters() {
+  benchmarkStartedAt = millis();
+  benchmarkFrames = 0;
+  benchmarkDrawMicros = 0;
+  benchmarkShowMicros = 0;
+  benchmarkLoopMicros = 0;
+  benchmarkDrawMaxMicros = 0;
+  benchmarkShowMaxMicros = 0;
+  benchmarkLoopMaxMicros = 0;
+}
+
+uint16_t benchmarkColor(uint16_t x, uint16_t y, uint32_t frame) {
+  uint16_t red = (x + frame) & 7;
+  uint16_t green = ((y << 1) + frame) & 15;
+  uint16_t blue = (x + y + frame * 3) & 7;
+  return (red << 11) | (green << 5) | blue;
+}
+
+void drawBenchmarkFrame(uint32_t frame) {
+  uint16_t width = matrix.width();
+  uint16_t height = matrix.height();
+
+  for (uint16_t y = 0; y < height; y++) {
+    for (uint16_t x = 0; x < width; x++) {
+      matrix.drawPixel(x, y, benchmarkColor(x, y, frame));
+    }
+  }
+}
+
+void reportBenchmark() {
+  uint32_t now = millis();
+  uint32_t elapsed = now - benchmarkStartedAt;
+  if (elapsed < 1000 || benchmarkFrames == 0) {
+    return;
+  }
+
+  uint32_t refreshCount = matrix.getFrameCount();
+  uint32_t appFps = (benchmarkFrames * 1000UL) / elapsed;
+  uint32_t refreshFps = (refreshCount * 1000UL) / elapsed;
+
+  Serial.print("Benchmark ");
+  Serial.print(matrix.width());
+  Serial.print('x');
+  Serial.print(matrix.height());
+  Serial.print(" @ ");
+  Serial.print(kMatrixBitDepth);
+  Serial.print(" bit | app FPS: ");
+  Serial.print(appFps);
+  Serial.print(" | Refresh FPS: ");
+  Serial.print(refreshFps);
+  Serial.print(" | avg us draw/show/loop: ");
+  Serial.print(benchmarkDrawMicros / benchmarkFrames);
+  Serial.print('/');
+  Serial.print(benchmarkShowMicros / benchmarkFrames);
+  Serial.print('/');
+  Serial.print(benchmarkLoopMicros / benchmarkFrames);
+  Serial.print(" | max us draw/show/loop: ");
+  Serial.print(benchmarkDrawMaxMicros);
+  Serial.print('/');
+  Serial.print(benchmarkShowMaxMicros);
+  Serial.print('/');
+  Serial.println(benchmarkLoopMaxMicros);
+
+  resetBenchmarkCounters();
+}
+
+void setup() {
+  Serial.begin(115200);
+  uint32_t serialStartedAt = millis();
+  while (!Serial && millis() - serialStartedAt < 5000) {
+    delay(10);
+  }
+
+  ProtomatterStatus status = matrix.begin();
+  Serial.print("Protomatter begin status: ");
+  Serial.println(static_cast<int>(status));
+
+  if (status != PROTOMATTER_OK) {
+    while (true) {
+      delay(1000);
+    }
+  }
+
+  matrix.fillScreen(0);
+  matrix.show();
+  matrix.getFrameCount();
+  resetBenchmarkCounters();
+
+  Serial.print("Matrix benchmark: ");
+  Serial.print(matrix.width());
+  Serial.print('x');
+  Serial.print(matrix.height());
+  Serial.print(" @ ");
+  Serial.print(kMatrixBitDepth);
+  Serial.println(" bit");
+}
+
+void loop() {
+  uint32_t loopStartedAt = micros();
+  drawBenchmarkFrame(benchmarkFrames);
+  uint32_t showStartedAt = micros();
+  matrix.show();
+  uint32_t loopEndedAt = micros();
+
+  addBenchmarkTiming(benchmarkDrawMicros, benchmarkDrawMaxMicros,
+                     showStartedAt - loopStartedAt);
+  addBenchmarkTiming(benchmarkShowMicros, benchmarkShowMaxMicros,
+                     loopEndedAt - showStartedAt);
+  addBenchmarkTiming(benchmarkLoopMicros, benchmarkLoopMaxMicros,
+                     loopEndedAt - loopStartedAt);
+  benchmarkFrames++;
+  reportBenchmark();
+}
+
+#endif
