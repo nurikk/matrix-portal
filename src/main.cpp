@@ -51,10 +51,17 @@ constexpr uint8_t kMaxHeight = 64;
 constexpr uint16_t kCellCount = kMaxWidth * kMaxHeight;
 constexpr uint16_t kMinLiveCells = 8;
 constexpr uint8_t kTypeCount = 6;
-constexpr uint8_t kHueStep = 7;
-constexpr uint8_t kSatStep = 18;
-constexpr uint8_t kLiveValueStep = 36;
-constexpr uint8_t kDeathValueStep = 24;
+// Render often, but let Life generations ooze forward with dense-birth drag.
+constexpr uint16_t kLifeStepMs = 100;
+constexpr uint16_t kBurnStepMs = 29;
+constexpr uint16_t kRenderFrameMs = 33;
+constexpr uint8_t kHueStep = 3;
+constexpr uint8_t kSatStep = 7;
+constexpr uint8_t kLiveValueStep = 10;
+constexpr uint8_t kDeathValueStep = 8;
+constexpr uint8_t kMediumChunkMass = 7;
+constexpr uint8_t kLargeChunkMass = 12;
+constexpr uint8_t kHugeChunkMass = 18;
 constexpr uint8_t kAccelAddressHigh = 0x19;
 constexpr uint8_t kAccelAddressLow = 0x18;
 constexpr uint8_t kAccelPollMs = 35;
@@ -62,7 +69,8 @@ constexpr int16_t kTiltDeadzone = 650;
 constexpr int16_t kStrongTilt = 2500;
 constexpr uint16_t kShakeDelta = 10000;
 constexpr uint8_t kBurnRingWidth = 2;
-constexpr uint8_t kBurnFadeStep = 34;
+constexpr uint8_t kBurnFadeStep = 18;
+constexpr uint8_t kMotionGlowFadeStep = 3;
 
 struct Hsv {
   uint8_t h;
@@ -109,6 +117,7 @@ uint32_t generation;
 uint32_t rngState = 0x43D12F5B;
 uint32_t fpsStartedAt;
 uint32_t framesThisPeriod;
+uint16_t lifeStepsThisPeriod;
 uint16_t randomEventsThisPeriod;
 bool accelerometerReady;
 bool accelerometerPrimed;
@@ -131,11 +140,12 @@ uint8_t burnEndRadius;
 uint32_t lastAccelReadAt;
 uint32_t lastKnockAt;
 uint32_t lastShakeAt;
+uint32_t lastSimulationStepAt;
+uint32_t lastRenderAt;
 uint16_t interactionEventsThisPeriod;
 uint16_t knockEventsThisPeriod;
 uint16_t burnEventsThisPeriod;
 uint16_t shakeEventsThisPeriod;
-uint16_t tiltEventsThisPeriod;
 uint32_t profileLoopMicros;
 uint32_t profileLifeMicros;
 uint32_t profileAccelMicros;
@@ -157,11 +167,6 @@ void addProfile(uint32_t &total, uint32_t &maximum, uint32_t elapsed) {
 
 uint32_t averageProfile(uint32_t total, uint16_t samples) {
   return samples ? total / samples : 0;
-}
-
-uint32_t profiledSimulationMicros() {
-  uint32_t renderAndShow = profileRenderMicros + profileShowMicros;
-  return profileLifeMicros > renderAndShow ? profileLifeMicros - renderAndShow : 0;
 }
 
 void resetProfileCounters() {
@@ -426,8 +431,8 @@ Hsv targetColorFor(uint16_t index, uint8_t x, uint8_t y, bool alive) {
     return {visualHue[index], 0, 0};
   }
 
-  uint8_t wave = triWave6(generation * 5 + x * 4 + y * 7 + cellType[index] * 11);
-  uint8_t shimmer = triWave6(generation * 3 + x * 5 + y * 3);
+  uint8_t wave = triWave6(generation * 2 + x * 3 + y * 5 + cellType[index] * 11);
+  uint8_t shimmer = triWave6(generation + x * 4 + y * 2);
   uint8_t hue = wrapHue(cellHue[index] + tiltHueBias +
                         static_cast<int16_t>(shimmer / 2) - 8);
   uint8_t saturation = cellSat[index];
@@ -494,6 +499,7 @@ void renderFrame() {
              showStartedAt - renderStartedAt);
   addProfile(profileShowMicros, profileShowMaxMicros, showEndedAt - showStartedAt);
   profileRenderSamples++;
+  framesThisPeriod++;
 }
 
 void clearBurnHeat() {
@@ -596,7 +602,6 @@ void stepBurnWave() {
   liveCells = nextLiveCells;
   changedCells = burnedCells;
   generation++;
-  renderFrame();
 
   if (burnRadius < 250) {
     burnRadius++;
@@ -633,8 +638,6 @@ void seedLife() {
     nextRows[y] = 0;
     liveCells += popcount64(currentRows[y]);
   }
-
-  renderFrame();
 }
 
 uint8_t dominantType(uint8_t counts[kTypeCount], uint8_t fallback) {
@@ -773,41 +776,6 @@ void addMotionBurst(int16_t cx, int16_t cy, uint8_t type, uint8_t hue,
   }
 }
 
-void addTiltStream() {
-  if (tiltStrength < 45 || (generation & 1)) {
-    return;
-  }
-
-  uint8_t extra = (tiltStrength - 40) >> 5;
-  if (extra > 5) {
-    extra = 5;
-  }
-  uint8_t count = 2 + extra;
-  uint8_t type = motionType();
-  uint8_t hue = motionHue(type);
-  bool horizontal = abs16(accelX) > abs16(accelY);
-
-  for (uint8_t i = 0; i < count; i++) {
-    int16_t x = random32() % panelWidth;
-    int16_t y = random32() % panelHeight;
-
-    if (horizontal) {
-      x = tiltDx > 0 ? 0 : panelWidth - 1;
-    } else {
-      y = tiltDy > 0 ? 0 : panelHeight - 1;
-    }
-
-    setNextAliveHsv(x, y, type, wrapHue(hue + i * 11), 230);
-    setNextAliveHsv(x + tiltDx, y + tiltDy, type, wrapHue(hue + 18 + i * 9), 220);
-    if (random32() & 1) {
-      setNextDead(x - tiltDx, y - tiltDy);
-    }
-  }
-
-  tiltEventsThisPeriod += count;
-  interactionEventsThisPeriod += count;
-}
-
 void applyInteractionEvents() {
   if (!accelerometerReady) {
     return;
@@ -828,8 +796,6 @@ void applyInteractionEvents() {
     pendingShakes--;
     interactionEventsThisPeriod += 5;
   }
-
-  addTiltStream();
 
   if (tiltStrength > 135 && (generation & 15) == 0) {
     addMotionBurst(cx, cy, type, hue, 2);
@@ -883,6 +849,53 @@ void recountNextStats(uint16_t &nextLiveCells, uint16_t &nextChangedCells) {
   }
 }
 
+uint8_t wrappedOffset(uint8_t value, int8_t offset, uint8_t limit) {
+  int16_t wrapped = static_cast<int16_t>(value) + offset;
+  if (wrapped < 0) {
+    return wrapped + limit;
+  }
+  if (wrapped >= limit) {
+    return wrapped - limit;
+  }
+  return wrapped;
+}
+
+uint8_t localChunkMass(uint8_t x, uint8_t y) {
+  uint8_t mass = 0;
+
+  for (int8_t dy = -2; dy <= 2; dy++) {
+    uint8_t yy = wrappedOffset(y, dy, panelHeight);
+    uint64_t row = currentRows[yy] & activeMask;
+
+    for (int8_t dx = -2; dx <= 2; dx++) {
+      uint8_t xx = wrappedOffset(x, dx, panelWidth);
+      if (row & bitForX[xx]) {
+        mass++;
+      }
+    }
+  }
+
+  return mass;
+}
+
+uint8_t chunkBirthCadence(uint8_t mass) {
+  if (mass >= kHugeChunkMass) {
+    return 4;
+  }
+  if (mass >= kLargeChunkMass) {
+    return 3;
+  }
+  if (mass >= kMediumChunkMass) {
+    return 2;
+  }
+  return 1;
+}
+
+bool denseBirthAllowed(uint8_t x, uint8_t y) {
+  uint8_t cadence = chunkBirthCadence(localChunkMass(x, y));
+  return cadence == 1 || (generation + x * 3 + y * 5) % cadence == 0;
+}
+
 void commitNextGeneration() {
   for (uint8_t y = 0; y < panelHeight; y++) {
     uint64_t previousRow = currentRows[y];
@@ -917,6 +930,8 @@ void commitNextGeneration() {
 }
 
 void stepLife() {
+  lifeStepsThisPeriod++;
+
   if (pendingKnocks) {
     startBurnWave();
   }
@@ -946,12 +961,17 @@ void stepLife() {
       uint64_t leftBit = leftBitForX[x];
       uint64_t bit = bitForX[x];
       uint64_t rightBit = rightBitForX[x];
+      bool alive = row & bit;
       uint8_t neighbors =
           !!(above & leftBit) + !!(above & bit) + !!(above & rightBit) +
           !!(row & leftBit) + !!(row & rightBit) +
           !!(below & leftBit) + !!(below & bit) + !!(below & rightBit);
 
-      if (neighbors == 3 || ((row & bit) && neighbors == 2)) {
+      if (neighbors == 3 || (alive && neighbors == 2)) {
+        if (!alive && !denseBirthAllowed(x, y)) {
+          continue;
+        }
+
         NeighborMix mix = {};
         if (above & leftBit) {
           addNeighbor(mix, aboveBase + leftX);
@@ -979,15 +999,15 @@ void stepLife() {
         }
 
         uint16_t index = rowBase + x;
-        uint8_t type = row & bit ? cellType[index] : dominantType(mix.typeCounts, randomType());
-        if ((row & bit) && (random32() & 15) == 0) {
+        uint8_t type = alive ? cellType[index] : dominantType(mix.typeCounts, randomType());
+        if (alive && (random32() & 15) == 0) {
           type = dominantType(mix.typeCounts, type);
         }
         uint8_t mixedNeighborHue = mixedHue(mix);
         uint8_t hue;
         uint8_t saturation;
 
-        if (row & bit) {
+        if (alive) {
           hue = blendHue(cellHue[index], mixedNeighborHue, 44);
           hue = blendHue(hue, speciesHues[type % kTypeCount], 20);
           saturation = approach(cellSat[index], mixedSaturation(mix), 7);
@@ -1009,7 +1029,6 @@ void stepLife() {
 
     nextRows[y] = nextRow & activeMask;
   }
-
   recountNextStats(nextLiveCells, nextChangedCells);
   applyRandomEvents(nextChangedCells < 6 || nextLiveCells < kMinLiveCells);
   applyInteractionEvents();
@@ -1024,7 +1043,6 @@ void stepLife() {
   generation++;
   liveCells = nextLiveCells;
   changedCells = nextChangedCells;
-  renderFrame();
 }
 
 void updateTiltState() {
@@ -1133,15 +1151,14 @@ void pollAccelerometer() {
 }
 
 void decayMotionEffects() {
-  if (motionGlow > 5) {
-    motionGlow -= 5;
+  if (motionGlow > kMotionGlowFadeStep) {
+    motionGlow -= kMotionGlowFadeStep;
   } else {
     motionGlow = 0;
   }
 }
 
 void reportFps() {
-  framesThisPeriod++;
   uint32_t now = millis();
   uint32_t elapsed = now - fpsStartedAt;
   if (elapsed < 1000) {
@@ -1150,10 +1167,13 @@ void reportFps() {
 
   uint32_t refreshCount = matrix.getFrameCount();
   uint32_t refreshFps = (refreshCount * 1000UL) / elapsed;
-  uint32_t lifeFps = (framesThisPeriod * 1000UL) / elapsed;
+  uint32_t renderFps = (framesThisPeriod * 1000UL) / elapsed;
+  uint32_t lifeUps = (lifeStepsThisPeriod * 1000UL) / elapsed;
 
-  Serial.print("Life FPS: ");
-  Serial.print(lifeFps);
+  Serial.print("Life UPS: ");
+  Serial.print(lifeUps);
+  Serial.print(" | Render FPS: ");
+  Serial.print(renderFps);
   Serial.print(" | Refresh FPS: ");
   Serial.print(refreshFps);
   Serial.print(" | live: ");
@@ -1176,12 +1196,10 @@ void reportFps() {
   Serial.print(tiltStrength);
   Serial.print(" | gen: ");
   Serial.print(generation);
-  Serial.print(" | avg us loop/step/sim/render/show/accel: ");
+  Serial.print(" | avg us loop/life/render/show/accel: ");
   Serial.print(averageProfile(profileLoopMicros, profileSamples));
   Serial.print('/');
-  Serial.print(averageProfile(profileLifeMicros, profileSamples));
-  Serial.print('/');
-  Serial.print(averageProfile(profiledSimulationMicros(), profileSamples));
+  Serial.print(averageProfile(profileLifeMicros, lifeStepsThisPeriod));
   Serial.print('/');
   Serial.print(averageProfile(profileRenderMicros, profileRenderSamples));
   Serial.print('/');
@@ -1199,12 +1217,12 @@ void reportFps() {
 
   fpsStartedAt = now;
   framesThisPeriod = 0;
+  lifeStepsThisPeriod = 0;
   randomEventsThisPeriod = 0;
   interactionEventsThisPeriod = 0;
   knockEventsThisPeriod = 0;
   burnEventsThisPeriod = 0;
   shakeEventsThisPeriod = 0;
-  tiltEventsThisPeriod = 0;
   resetProfileCounters();
 }
 
@@ -1227,15 +1245,18 @@ void setup() {
   matrix.fillScreen(0);
   matrix.show();
   seedLife();
+  renderFrame();
   resetProfileCounters();
   fpsStartedAt = millis();
+  lastSimulationStepAt = fpsStartedAt;
+  lastRenderAt = fpsStartedAt;
   framesThisPeriod = 0;
+  lifeStepsThisPeriod = 0;
   randomEventsThisPeriod = 0;
   interactionEventsThisPeriod = 0;
   knockEventsThisPeriod = 0;
   burnEventsThisPeriod = 0;
   shakeEventsThisPeriod = 0;
-  tiltEventsThisPeriod = 0;
   matrix.getFrameCount();
 
   Serial.print("Game of Life: ");
@@ -1249,16 +1270,38 @@ void loop() {
   uint32_t accelStartedAt = loopStartedAt;
   pollAccelerometer();
   uint32_t lifeStartedAt = micros();
-  stepLife();
+  uint32_t now = millis();
+  uint16_t simulationInterval = burnWaveActive ? kBurnStepMs : kLifeStepMs;
+  bool runSimulation = pendingKnocks || now - lastSimulationStepAt >= simulationInterval;
+  bool rendered = false;
+
+  if (runSimulation) {
+    stepLife();
+    lastSimulationStepAt = now;
+  }
+
   uint32_t lifeEndedAt = micros();
-  decayMotionEffects();
+
+  if (runSimulation || now - lastRenderAt >= kRenderFrameMs) {
+    renderFrame();
+    lastRenderAt = now;
+    decayMotionEffects();
+    rendered = true;
+  }
+
   uint32_t loopEndedAt = micros();
 
   profileAccelMicros += lifeStartedAt - accelStartedAt;
-  addProfile(profileLifeMicros, profileLifeMaxMicros, lifeEndedAt - lifeStartedAt);
+  if (runSimulation) {
+    addProfile(profileLifeMicros, profileLifeMaxMicros, lifeEndedAt - lifeStartedAt);
+  }
   addProfile(profileLoopMicros, profileLoopMaxMicros, loopEndedAt - loopStartedAt);
   profileSamples++;
   reportFps();
+
+  if (!rendered && !runSimulation) {
+    delay(1);
+  }
 }
 
 #else
