@@ -1,13 +1,25 @@
 #include <Arduino.h>
 #include <Adafruit_LIS3DH.h>
 #include <Adafruit_Protomatter.h>
+#include <Wire.h>
 
+#if defined(ARDUINO_ADAFRUIT_MATRIXPORTAL_ESP32S3)
+// MatrixPortal S3 HUB75 pinout from Adafruit Protomatter's official example.
+uint8_t rgbPins[] = {42, 41, 40, 38, 39, 37};
+uint8_t addrPins[] = {45, 36, 48, 35, 21};
+uint8_t clockPin = 2;
+uint8_t latchPin = 47;
+uint8_t oePin = 14;
+#elif defined(_VARIANT_MATRIXPORTAL_M4_)
 // MatrixPortal M4 HUB75 pinout from Adafruit Protomatter's official example.
 uint8_t rgbPins[] = {7, 8, 9, 10, 11, 12};
 uint8_t addrPins[] = {17, 18, 19, 20, 21};
 uint8_t clockPin = 14;
 uint8_t latchPin = 15;
 uint8_t oePin = 16;
+#else
+#error "Unsupported board: configure Matrix Portal HUB75 pins for this target."
+#endif
 
 #ifndef MATRIX_WIDTH
 #define MATRIX_WIDTH 64
