@@ -108,6 +108,33 @@ so it re-applies on a clean build and is reverted by `pio run -t clean` + re-fet
 If the M4 is already in bootloader mode and PlatformIO's 1200-baud touch is fighting the
 bootloader port, upload with `matrixportal_m4_bootloader`, which disables the touch.
 
+## WiFi control panel (ESP32-S3)
+
+S3 Life builds include a browser-based control panel. M4 and all benchmark builds have
+no networking code.
+
+**First-boot WiFi provisioning** uses Espressif's WiFiProv over BLE. Install the
+**ESP BLE Provisioning** app (iOS or Android), scan for `PROV_MatrixLife`, and enter
+proof-of-possession `matrixlife`. Credentials are written to NVS and never hardcoded;
+BT memory is freed automatically after provisioning. To re-provision, send
+`POST /api/forget-wifi` from the panel (erases NVS creds and reboots).
+
+**Reaching the panel:** after connecting, the device advertises mDNS as
+`matrixportal.local` and scrolls its IP address across the panel once. Open
+`http://matrixportal.local/` in any browser on the same network (or use the scrolled IP
+directly).
+
+**Live-preview + Save model:** every slider move applies the new value immediately so
+you can see the effect in real time. Changes are ephemeral until you press **Save**,
+which persists them to NVS. **Revert** restores the last saved values; **Reset**
+restores factory defaults. **Reseed** and **Trigger burn** are instant actions.
+Hardware geometry (`MATRIX_WIDTH`, `MATRIX_BIT_DEPTH`, etc.) stays compile-time and is
+shown read-only in the panel.
+
+**Partition note:** `[env:matrixportal_s3]` uses `board_build.partitions = huge_app.csv`
+to accommodate BLE + WiFi + application code. The S3 binary occupies roughly 48% of the
+3 MB app partition.
+
 ## Development
 
 The simulation's neighbour-counting and Conway rule live in a dependency-free header
@@ -125,11 +152,16 @@ patterns. Run them after touching the simulation math.
 ## Project layout
 
 ```
-src/main.cpp        # entire firmware: Life simulation, rendering, input, and benchmark path
-platformio.ini      # board + build-flag environments
-scripts/             # PlatformIO pre-build scripts (Protomatter clock patch)
-benchmark.md         # measured FPS / refresh / timing across boards, sizes, color depths
-wf4_driver_design.md # design notes for a from-scratch 4-output Huidu HD-WF4 driver
+src/main.cpp           # entire firmware: Life simulation, rendering, input, and benchmark path
+src/life_bits.h        # bit-parallel Conway core (host-testable, no Arduino deps)
+src/life_settings.h    # runtime-tunable knobs struct (X-macro, host-testable)
+src/web_portal.cpp     # WiFi provisioning, web server, NVS persistence (S3 only)
+src/web_ui.h           # self-contained HTML control panel (S3 only)
+platformio.ini         # board + build-flag environments
+scripts/               # PlatformIO pre-build scripts (Protomatter clock patch)
+tests/                 # host unit tests (clang++, no board required)
+benchmark.md           # measured FPS / refresh / timing across boards, sizes, color depths
+wf4_driver_design.md   # design notes for a from-scratch 4-output Huidu HD-WF4 driver
 ```
 
 ## Further reading
