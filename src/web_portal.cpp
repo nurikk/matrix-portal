@@ -218,13 +218,14 @@ void webTaskFn(void *) {
 }  // namespace
 
 void webServerStart() {
+  if (gWebTask) {
+    return;  // already started; preserve in-flight gPending across WiFi reconnects
+  }
   taskENTER_CRITICAL(&gSettingsMux);
-  gPending = gLive;
+  gPending = gLive;        // first connect only: start desired == current
   gPendingDirty = false;
   taskEXIT_CRITICAL(&gSettingsMux);
-  if (!gWebTask) {
-    xTaskCreatePinnedToCore(webTaskFn, "web", 8192, nullptr, 1, &gWebTask, 0);
-  }
+  xTaskCreatePinnedToCore(webTaskFn, "web", 8192, nullptr, 1, &gWebTask, 0);  // core 0
 }
 
 void webPortalTick() {
