@@ -504,6 +504,14 @@ void renderFrame() {
     for (uint8_t x = 0; x < panelWidth; x++) {
       uint16_t index = baseIndex + x;
       bool alive = row & bitForX[x];
+
+      // Settled black cells (dead, fully faded, no heat, not forced) are
+      // already correct and unchanging -- skip the per-cell colour work.
+      if (!alive && visualValue[index] == 0 && burnHeat[index] == 0 &&
+          !forceRedraw[index]) {
+        continue;
+      }
+
       Hsv target = targetColorFor(index, x, y, alive);
       bool force = forceRedraw[index];
       forceRedraw[index] = false;

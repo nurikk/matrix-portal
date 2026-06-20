@@ -8,6 +8,37 @@ The current firmware is tuned for a 64x64 HUB75 matrix. Running a true 128x128 v
 
 Best practical direction for 128x128 on MatrixPortal S3 or M4: use 3-bit Protomatter color depth, reduce or pack per-cell state, and avoid full-rate full-frame simulation work.
 
+## Optimization Results (2026-06-20, MatrixPortal S3)
+
+Two changes to the production Life path, each measured with a deterministic A/B
+(fixed RNG seed + accelerometer disabled, so both builds evolve bit-identically;
+verified by matched live-cell counts at matched generations). Times are the
+steady-state mean of the per-second profiler, in microseconds.
+
+1. **Bitwise simulation** (`src/life_bits.h`): neighbour counting via bit-parallel
+   SWAR over the two-word `RowBits` rows instead of 8 bit-tests per cell.
+2. **Render skip**: settled black cells (dead, fully faded, no burn heat) are
+   skipped before the per-cell colour work in `renderFrame`. Output-identical --
+   those cells never produced a `drawPixel`.
+
+| Stage  | Grid    | Before  | After   | Speedup |
+| ------ | ------- | ------: | ------: | ------: |
+| `life` (sim)    | 64x64   |  7,218  |  2,771  | 2.6x |
+| `life` (sim)    | 128x128 | 28,349  | 10,145  | 2.8x |
+| `render` (loop) | 64x64   |  3,867  |  1,274  | 3.0x |
+| `render` (loop) | 128x128 | 15,257  |  5,167  | 3.0x |
+
+Combined per-step compute (sim + render, excluding `matrix.show()`):
+
+- 64x64:   ~11.1 ms -> ~4.0 ms
+- 128x128: ~43.6 ms -> ~15.3 ms
+
+After these changes the remaining 128x128 per-frame display cost is `render`
+(~5.2 ms) + `matrix.show()` (~6.1 ms, Protomatter canvas->bitplane conversion,
+library code). The sim (~10.1 ms) runs at the `kLifeStepMs` cadence (~10 Hz), not
+per frame. Further gains would come from an active-cell list for `render` or
+reducing `show()` cost, both higher-effort / lower-return.
+
 ## Hardware And Firmware Context
 
 - Board: Adafruit MatrixPortal M4, SAMD51J19A, 120 MHz, 192 KB RAM.
