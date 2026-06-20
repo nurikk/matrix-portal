@@ -46,6 +46,10 @@ uint8_t oePin = 16;
 #define WIFI_PORTAL_ENABLED 0
 #endif
 
+#if WIFI_PORTAL_ENABLED
+#include "web_portal.h"
+#endif
+
 constexpr uint16_t kMatrixWidth = MATRIX_WIDTH;
 constexpr uint8_t kMatrixBitDepth = MATRIX_BIT_DEPTH;
 constexpr uint8_t kMatrixRgbChains = MATRIX_RGB_CHAINS;
@@ -1329,6 +1333,9 @@ void setup() {
   }
 
   configureLifeBounds();
+#if WIFI_PORTAL_ENABLED
+  webPortalBegin();   // loads gSaved/gLive from NVS (defaults on first boot)
+#endif
   initAccelerometer();
   matrix.fillScreen(0);
   matrix.show();
@@ -1354,6 +1361,9 @@ void setup() {
 }
 
 void loop() {
+#if WIFI_PORTAL_ENABLED
+  webPortalTick();
+#endif
   uint32_t loopStartedAt = micros();
   uint32_t accelStartedAt = loopStartedAt;
   pollAccelerometer();
