@@ -1,7 +1,7 @@
 [project]
 name = "matrix-portal"
 version = "0.1.0"
-description = "Add your description here"
+description = "PlatformIO toolchain for the MatrixPortal LED-matrix Game of Life firmware"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [

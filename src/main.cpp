@@ -3,6 +3,8 @@
 #include <Adafruit_Protomatter.h>
 #include <Wire.h>
 
+#include "life_bits.h"
+
 #if defined(ARDUINO_ADAFRUIT_MATRIXPORTAL_ESP32S3)
 // MatrixPortal S3 HUB75 pinout from Adafruit Protomatter's official example.
 uint8_t rgbPins[] = {42, 41, 40, 38, 39, 37};
@@ -106,41 +108,8 @@ struct NeighborMix {
   bool hasHue;
 };
 
-struct RowBits {
-  uint64_t low;
-  uint64_t high;
-
-  RowBits(uint64_t lowValue = 0, uint64_t highValue = 0)
-      : low(lowValue), high(highValue) {}
-
-  operator bool() const { return low || high; }
-};
-
-RowBits operator~(RowBits value) { return RowBits(~value.low, ~value.high); }
-
-RowBits operator&(RowBits a, RowBits b) {
-  return RowBits(a.low & b.low, a.high & b.high);
-}
-
-RowBits operator|(RowBits a, RowBits b) {
-  return RowBits(a.low | b.low, a.high | b.high);
-}
-
-RowBits operator^(RowBits a, RowBits b) {
-  return RowBits(a.low ^ b.low, a.high ^ b.high);
-}
-
-RowBits &operator|=(RowBits &a, RowBits b) {
-  a.low |= b.low;
-  a.high |= b.high;
-  return a;
-}
-
-RowBits &operator&=(RowBits &a, RowBits b) {
-  a.low &= b.low;
-  a.high &= b.high;
-  return a;
-}
+// RowBits and the bitwise Game of Life core live in life_bits.h so they can be
+// unit-tested on the host (tests/test_life_bits.cpp).
 
 const uint8_t speciesHues[kTypeCount] = {128, 86, 214, 24, 160, 0};
 
@@ -469,13 +438,7 @@ void configureLifeBounds() {
   int16_t height = matrix.height();
   panelWidth = width < kMaxWidth ? width : kMaxWidth;
   panelHeight = height < kMaxHeight ? height : kMaxHeight;
-  if (panelWidth <= 64) {
-    activeMask = RowBits(panelWidth == 64 ? UINT64_MAX : ((1ULL << panelWidth) - 1ULL), 0);
-  } else {
-    uint8_t highBits = panelWidth - 64;
-    activeMask = RowBits(UINT64_MAX,
-                         highBits == 64 ? UINT64_MAX : ((1ULL << highBits) - 1ULL));
-  }
+  activeMask = activeMaskFor(panelWidth);
   burnCenterX = pendingBurnCenterX = panelWidth / 2;
   burnCenterY = pendingBurnCenterY = panelHeight / 2;
 
@@ -1071,81 +1034,84 @@ void stepLife() {
     RowBits above = currentRows[aboveY];
     RowBits row = currentRows[y];
     RowBits below = currentRows[belowY];
+    // Bit-parallel Conway step: one candidate mask for the whole row
+    // (births on 3, survivors on 2/3) instead of counting 8 neighbours per
+    // cell. See life_bits.h / tests/test_life_bits.cpp.
+    RowBits candidates = conwayNextRow(above & activeMask, row & activeMask,
+                                       below & activeMask, panelWidth, activeMask);
     RowBits nextRow = 0;
     uint16_t aboveBase = aboveY * kMaxWidth;
     uint16_t rowBase = y * kMaxWidth;
     uint16_t belowBase = belowY * kMaxWidth;
 
     for (uint8_t x = 0; x < panelWidth; x++) {
+      RowBits bit = bitForX[x];
+      if (!(candidates & bit)) {
+        continue;
+      }
+
+      bool alive = row & bit;
+      if (!alive && !denseBirthAllowed(x, y)) {
+        continue;
+      }
+
       uint8_t leftX = x == 0 ? panelWidth - 1 : x - 1;
       uint8_t rightX = x + 1 == panelWidth ? 0 : x + 1;
       RowBits leftBit = leftBitForX[x];
-      RowBits bit = bitForX[x];
       RowBits rightBit = rightBitForX[x];
-      bool alive = row & bit;
-      uint8_t neighbors =
-          !!(above & leftBit) + !!(above & bit) + !!(above & rightBit) +
-          !!(row & leftBit) + !!(row & rightBit) +
-          !!(below & leftBit) + !!(below & bit) + !!(below & rightBit);
 
-      if (neighbors == 3 || (alive && neighbors == 2)) {
-        if (!alive && !denseBirthAllowed(x, y)) {
-          continue;
-        }
-
-        NeighborMix mix = {};
-        if (above & leftBit) {
-          addNeighbor(mix, aboveBase + leftX);
-        }
-        if (above & bit) {
-          addNeighbor(mix, aboveBase + x);
-        }
-        if (above & rightBit) {
-          addNeighbor(mix, aboveBase + rightX);
-        }
-        if (row & leftBit) {
-          addNeighbor(mix, rowBase + leftX);
-        }
-        if (row & rightBit) {
-          addNeighbor(mix, rowBase + rightX);
-        }
-        if (below & leftBit) {
-          addNeighbor(mix, belowBase + leftX);
-        }
-        if (below & bit) {
-          addNeighbor(mix, belowBase + x);
-        }
-        if (below & rightBit) {
-          addNeighbor(mix, belowBase + rightX);
-        }
-
-        uint16_t index = rowBase + x;
-        uint8_t type = alive ? cellType[index] : dominantType(mix.typeCounts, randomType());
-        if (alive && (random32() & 15) == 0) {
-          type = dominantType(mix.typeCounts, type);
-        }
-        uint8_t mixedNeighborHue = mixedHue(mix);
-        uint8_t hue;
-        uint8_t saturation;
-
-        if (alive) {
-          hue = blendHue(cellHue[index], mixedNeighborHue, 44);
-          hue = blendHue(hue, speciesHues[type % kTypeCount], 20);
-          saturation = approach(cellSat[index], mixedSaturation(mix), 7);
-        } else {
-          hue = blendHue(mixedNeighborHue, speciesHues[type % kTypeCount], 72);
-          saturation = mixedSaturation(mix);
-        }
-
-        nextType[index] = maybeMutate(type);
-        if (nextType[index] != type) {
-          hue = blendHue(hue, speciesHues[nextType[index]], 120);
-          saturation = addSaturated(saturation, 18);
-        }
-        nextHue[index] = mutateHue(hue);
-        nextSat[index] = saturation < 175 ? 175 : saturation;
-        nextRow |= bit;
+      NeighborMix mix = {};
+      if (above & leftBit) {
+        addNeighbor(mix, aboveBase + leftX);
       }
+      if (above & bit) {
+        addNeighbor(mix, aboveBase + x);
+      }
+      if (above & rightBit) {
+        addNeighbor(mix, aboveBase + rightX);
+      }
+      if (row & leftBit) {
+        addNeighbor(mix, rowBase + leftX);
+      }
+      if (row & rightBit) {
+        addNeighbor(mix, rowBase + rightX);
+      }
+      if (below & leftBit) {
+        addNeighbor(mix, belowBase + leftX);
+      }
+      if (below & bit) {
+        addNeighbor(mix, belowBase + x);
+      }
+      if (below & rightBit) {
+        addNeighbor(mix, belowBase + rightX);
+      }
+
+      uint16_t index = rowBase + x;
+      uint8_t type = alive ? cellType[index] : dominantType(mix.typeCounts, randomType());
+      if (alive && (random32() & 15) == 0) {
+        type = dominantType(mix.typeCounts, type);
+      }
+      uint8_t mixedNeighborHue = mixedHue(mix);
+      uint8_t hue;
+      uint8_t saturation;
+
+      if (alive) {
+        hue = blendHue(cellHue[index], mixedNeighborHue, 44);
+        hue = blendHue(hue, speciesHues[type % kTypeCount], 20);
+        saturation = approach(cellSat[index], mixedSaturation(mix), 7);
+      } else {
+        hue = blendHue(mixedNeighborHue, speciesHues[type % kTypeCount], 72);
+        saturation = mixedSaturation(mix);
+      }
+
+      nextType[index] = maybeMutate(type);
+      if (nextType[index] != type) {
+        hue = blendHue(hue, speciesHues[nextType[index]], 120);
+        saturation = addSaturated(saturation, 18);
+      }
+      nextHue[index] = mutateHue(hue);
+      nextSat[index] = saturation < 175 ? 175 : saturation;
+      nextRow |= bit;
     }
 
     nextRows[y] = nextRow & activeMask;
