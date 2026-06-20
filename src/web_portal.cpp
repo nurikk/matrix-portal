@@ -25,8 +25,7 @@ extern uint8_t panelHeight;
 extern int gGeoBitDepth;
 extern int gGeoTile;
 
-// Temporary placeholder — Task 6 deletes this and adds #include "web_ui.h"
-static const char kIndexHtml[] = "<!doctype html><title>MatrixLife</title><p>panel coming soon</p>";
+#include "web_ui.h"
 
 void webServerStart();  // defined below; called from onWiFiEvent
 
