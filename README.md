@@ -121,7 +121,7 @@ BT memory is freed automatically after provisioning. To re-provision, send
 
 **Reaching the panel:** after connecting, the device advertises mDNS as
 `matrixportal.local` and scrolls its IP address across the panel once. Open
-`http://matrixportal.local/` in any browser on the same network (or use the scrolled IP
+`http://matrixportal.local/` (plain HTTP, port 80) in any browser on the same network (or use the scrolled IP
 directly).
 
 **Live-preview + Save model:** every slider move applies the new value immediately so
@@ -152,7 +152,7 @@ patterns. Run them after touching the simulation math.
 ## Project layout
 
 ```
-src/main.cpp           # entire firmware: Life simulation, rendering, input, and benchmark path
+src/main.cpp           # Life simulation, rendering, input, and benchmark path
 src/life_bits.h        # bit-parallel Conway core (host-testable, no Arduino deps)
 src/life_settings.h    # runtime-tunable knobs struct (X-macro, host-testable)
 src/web_portal.cpp     # WiFi provisioning, web server, NVS persistence (S3 only)

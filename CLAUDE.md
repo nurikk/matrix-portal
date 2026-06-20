@@ -23,8 +23,7 @@ The serial port used during development is `/dev/cu.usbmodem2021301` — confirm
 
 Environments are defined in `platformio.ini`. Behavior is selected at **compile time**
 via `build_flags`: `MATRIX_WIDTH`, `MATRIX_BIT_DEPTH`, `MATRIX_RGB_CHAINS`, `MATRIX_TILE`,
-`MATRIX_BENCHMARK`. There is no runtime configuration yet — every tuning change requires a
-rebuild + reflash.
+`MATRIX_BENCHMARK`. Geometry and the benchmark/board selection are compile-time and require a rebuild + reflash; the ~20 simulation knobs are tunable at runtime via the WiFi control panel (ESP32-S3 only — see below).
 
 ## Host tests (no board)
 
