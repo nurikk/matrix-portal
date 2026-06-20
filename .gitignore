@@ -11,3 +11,6 @@ wheels/
 
 # PlatformIO build files
 .pio/
+
+# Generated from web/index.html by scripts/embed_web_ui.py (pre-build)
+/src/web_ui.h

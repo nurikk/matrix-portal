@@ -119,7 +119,7 @@ WebServer gServer(80);
 TaskHandle_t gWebTask = nullptr;
 
 void sendSettingsJson() {
-  static char buf[8192];
+  static char buf[12288];   // headroom for per-field labels + descriptions
   size_t n = (size_t)snprintf(buf, sizeof(buf),
       "{\"geometry\":{\"width\":%d,\"height\":%d,\"bitDepth\":%d,\"tile\":%d},\"settings\":",
       (int)panelWidth, (int)panelHeight, gGeoBitDepth, gGeoTile);

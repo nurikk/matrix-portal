@@ -43,6 +43,7 @@ int main() {
   CHECK(n > 0 && n < sizeof(buf), "serialize fits buffer");
   CHECK(std::strstr(buf, "\"key\":\"lifeStepMs\"") != nullptr, "json has lifeStepMs");
   CHECK(std::strstr(buf, "\"default\":100") != nullptr, "json has default 100");
+  CHECK(std::strstr(buf, "\"desc\":\"") != nullptr, "json has per-field desc");
 
   if (g_failures == 0) std::printf("ALL SETTINGS TESTS PASSED\n");
   return g_failures ? 1 : 0;
