@@ -54,12 +54,12 @@ Adafruit_LIS3DH accelerometer = Adafruit_LIS3DH();
 
 #if !MATRIX_BENCHMARK
 
-#if MATRIX_WIDTH > 64 || MATRIX_TILE != 1 || MATRIX_RGB_CHAINS != 1
-#error "The Life firmware currently supports one 64x64 chain. Use MATRIX_BENCHMARK for larger panel timing tests."
+#if MATRIX_WIDTH > 128 || MATRIX_TILE > 2 || MATRIX_TILE < -2 || MATRIX_RGB_CHAINS != 1
+#error "The Life firmware currently supports up to a 128x128 single-chain tiled matrix."
 #endif
 
-constexpr uint8_t kMaxWidth = 64;
-constexpr uint8_t kMaxHeight = 64;
+constexpr uint8_t kMaxWidth = MATRIX_WIDTH;
+constexpr uint8_t kMaxHeight = MATRIX_TILE < 0 ? 64 * -MATRIX_TILE : 64 * MATRIX_TILE;
 constexpr uint16_t kCellCount = kMaxWidth * kMaxHeight;
 constexpr uint16_t kMinLiveCells = 8;
 constexpr uint8_t kTypeCount = 6;
@@ -106,16 +106,52 @@ struct NeighborMix {
   bool hasHue;
 };
 
+struct RowBits {
+  uint64_t low;
+  uint64_t high;
+
+  RowBits(uint64_t lowValue = 0, uint64_t highValue = 0)
+      : low(lowValue), high(highValue) {}
+
+  operator bool() const { return low || high; }
+};
+
+RowBits operator~(RowBits value) { return RowBits(~value.low, ~value.high); }
+
+RowBits operator&(RowBits a, RowBits b) {
+  return RowBits(a.low & b.low, a.high & b.high);
+}
+
+RowBits operator|(RowBits a, RowBits b) {
+  return RowBits(a.low | b.low, a.high | b.high);
+}
+
+RowBits operator^(RowBits a, RowBits b) {
+  return RowBits(a.low ^ b.low, a.high ^ b.high);
+}
+
+RowBits &operator|=(RowBits &a, RowBits b) {
+  a.low |= b.low;
+  a.high |= b.high;
+  return a;
+}
+
+RowBits &operator&=(RowBits &a, RowBits b) {
+  a.low &= b.low;
+  a.high &= b.high;
+  return a;
+}
+
 const uint8_t speciesHues[kTypeCount] = {128, 86, 214, 24, 160, 0};
 
 uint8_t panelWidth = kMaxWidth;
 uint8_t panelHeight = kMaxHeight;
-uint64_t activeMask = UINT64_MAX;
-uint64_t currentRows[kMaxHeight];
-uint64_t nextRows[kMaxHeight];
-uint64_t bitForX[kMaxWidth];
-uint64_t leftBitForX[kMaxWidth];
-uint64_t rightBitForX[kMaxWidth];
+RowBits activeMask = RowBits(UINT64_MAX, kMaxWidth > 64 ? UINT64_MAX : 0);
+RowBits currentRows[kMaxHeight];
+RowBits nextRows[kMaxHeight];
+RowBits bitForX[kMaxWidth];
+RowBits leftBitForX[kMaxWidth];
+RowBits rightBitForX[kMaxWidth];
 uint8_t cellType[kCellCount];
 uint8_t nextType[kCellCount];
 uint8_t cellHue[kCellCount];
@@ -215,6 +251,10 @@ uint32_t random32() {
 
 uint8_t popcount64(uint64_t value) {
   return __builtin_popcountll(value);
+}
+
+uint8_t popcount64(RowBits value) {
+  return __builtin_popcountll(value.low) + __builtin_popcountll(value.high);
 }
 
 uint8_t ctz64(uint64_t value) {
@@ -429,14 +469,27 @@ void configureLifeBounds() {
   int16_t height = matrix.height();
   panelWidth = width < kMaxWidth ? width : kMaxWidth;
   panelHeight = height < kMaxHeight ? height : kMaxHeight;
-  activeMask = panelWidth == 64 ? UINT64_MAX : ((1ULL << panelWidth) - 1ULL);
+  if (panelWidth <= 64) {
+    activeMask = RowBits(panelWidth == 64 ? UINT64_MAX : ((1ULL << panelWidth) - 1ULL), 0);
+  } else {
+    uint8_t highBits = panelWidth - 64;
+    activeMask = RowBits(UINT64_MAX,
+                         highBits == 64 ? UINT64_MAX : ((1ULL << highBits) - 1ULL));
+  }
   burnCenterX = pendingBurnCenterX = panelWidth / 2;
   burnCenterY = pendingBurnCenterY = panelHeight / 2;
 
   for (uint8_t x = 0; x < panelWidth; x++) {
-    bitForX[x] = 1ULL << x;
-    leftBitForX[x] = 1ULL << (x == 0 ? panelWidth - 1 : x - 1);
-    rightBitForX[x] = 1ULL << (x + 1 == panelWidth ? 0 : x + 1);
+    uint8_t bitX = x & 63;
+    uint8_t leftX = (x == 0 ? panelWidth - 1 : x - 1) & 63;
+    uint8_t rightX = (x + 1 == panelWidth ? 0 : x + 1) & 63;
+    bitForX[x] = x < 64 ? RowBits(1ULL << bitX, 0) : RowBits(0, 1ULL << bitX);
+    leftBitForX[x] = (x == 0 ? panelWidth - 1 : x - 1) < 64
+                         ? RowBits(1ULL << leftX, 0)
+                         : RowBits(0, 1ULL << leftX);
+    rightBitForX[x] = (x + 1 == panelWidth ? 0 : x + 1) < 64
+                          ? RowBits(1ULL << rightX, 0)
+                          : RowBits(0, 1ULL << rightX);
   }
 }
 
@@ -482,7 +535,7 @@ void renderFrame() {
   updatedPixels = 0;
 
   for (uint8_t y = 0; y < panelHeight; y++) {
-    uint64_t row = currentRows[y] & activeMask;
+    RowBits row = currentRows[y] & activeMask;
     uint16_t baseIndex = y * kMaxWidth;
 
     for (uint8_t x = 0; x < panelWidth; x++) {
@@ -635,7 +688,7 @@ void stepBurnWave() {
   uint16_t outerSquared = static_cast<uint16_t>(outerRadius) * outerRadius;
 
   for (uint8_t y = 0; y < panelHeight; y++) {
-    uint64_t row = currentRows[y] & activeMask;
+    RowBits row = currentRows[y] & activeMask;
     uint16_t baseIndex = y * kMaxWidth;
 
     for (uint8_t x = 0; x < panelWidth; x++) {
@@ -686,7 +739,7 @@ void seedLife() {
   generation = 0;
 
   for (uint8_t y = 0; y < panelHeight; y++) {
-    uint64_t row = 0;
+    RowBits row = 0;
     uint16_t baseIndex = y * kMaxWidth;
 
     for (uint8_t x = 0; x < panelWidth; x++) {
@@ -911,7 +964,7 @@ void recountNextStats(uint16_t &nextLiveCells, uint16_t &nextChangedCells) {
   nextChangedCells = 0;
 
   for (uint8_t y = 0; y < panelHeight; y++) {
-    uint64_t row = nextRows[y] & activeMask;
+    RowBits row = nextRows[y] & activeMask;
     nextLiveCells += popcount64(row);
     nextChangedCells += popcount64((currentRows[y] ^ row) & activeMask);
   }
@@ -933,7 +986,7 @@ uint8_t localChunkMass(uint8_t x, uint8_t y) {
 
   for (int8_t dy = -2; dy <= 2; dy++) {
     uint8_t yy = wrappedOffset(y, dy, panelHeight);
-    uint64_t row = currentRows[yy] & activeMask;
+    RowBits row = currentRows[yy] & activeMask;
 
     for (int8_t dx = -2; dx <= 2; dx++) {
       uint8_t xx = wrappedOffset(x, dx, panelWidth);
@@ -966,12 +1019,12 @@ bool denseBirthAllowed(uint8_t x, uint8_t y) {
 
 void commitNextGeneration() {
   for (uint8_t y = 0; y < panelHeight; y++) {
-    uint64_t previousRow = currentRows[y];
-    uint64_t nextRow = nextRows[y] & activeMask;
+    RowBits previousRow = currentRows[y];
+    RowBits nextRow = nextRows[y] & activeMask;
     uint16_t baseIndex = y * kMaxWidth;
 
     for (uint8_t x = 0; x < panelWidth; x++) {
-      uint64_t bit = bitForX[x];
+      RowBits bit = bitForX[x];
       uint16_t index = baseIndex + x;
       bool wasAlive = previousRow & bit;
       bool isAlive = nextRow & bit;
@@ -1015,10 +1068,10 @@ void stepLife() {
   for (uint8_t y = 0; y < panelHeight; y++) {
     uint8_t aboveY = y == 0 ? panelHeight - 1 : y - 1;
     uint8_t belowY = y + 1 == panelHeight ? 0 : y + 1;
-    uint64_t above = currentRows[aboveY];
-    uint64_t row = currentRows[y];
-    uint64_t below = currentRows[belowY];
-    uint64_t nextRow = 0;
+    RowBits above = currentRows[aboveY];
+    RowBits row = currentRows[y];
+    RowBits below = currentRows[belowY];
+    RowBits nextRow = 0;
     uint16_t aboveBase = aboveY * kMaxWidth;
     uint16_t rowBase = y * kMaxWidth;
     uint16_t belowBase = belowY * kMaxWidth;
@@ -1026,9 +1079,9 @@ void stepLife() {
     for (uint8_t x = 0; x < panelWidth; x++) {
       uint8_t leftX = x == 0 ? panelWidth - 1 : x - 1;
       uint8_t rightX = x + 1 == panelWidth ? 0 : x + 1;
-      uint64_t leftBit = leftBitForX[x];
-      uint64_t bit = bitForX[x];
-      uint64_t rightBit = rightBitForX[x];
+      RowBits leftBit = leftBitForX[x];
+      RowBits bit = bitForX[x];
+      RowBits rightBit = rightBitForX[x];
       bool alive = row & bit;
       uint8_t neighbors =
           !!(above & leftBit) + !!(above & bit) + !!(above & rightBit) +
