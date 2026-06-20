@@ -47,6 +47,7 @@ uint8_t oePin = 16;
 #endif
 
 #if WIFI_PORTAL_ENABLED
+#include <WiFi.h>
 #include "web_portal.h"
 extern volatile bool gShowIpScroll;
 extern char gIpText[32];
@@ -88,6 +89,16 @@ constexpr uint8_t kClickDouble = 0x20;
 LifeSettings gLive = defaultLifeSettings();
 LifeSettings gSaved = defaultLifeSettings();
 LifeSettings gDefaults = defaultLifeSettings();   // non-const: external linkage so web_portal can extern it
+
+#if WIFI_PORTAL_ENABLED
+volatile bool gReqReseed = false;
+volatile bool gReqBurn = false;
+volatile bool gReqForget = false;
+volatile uint16_t gStatRenderFps = 0;
+volatile uint16_t gStatLifeUps = 0;
+int gGeoBitDepth = MATRIX_BIT_DEPTH;
+int gGeoTile = MATRIX_TILE;
+#endif
 
 struct Hsv {
   uint8_t h;
@@ -1309,6 +1320,10 @@ void reportFps() {
   Serial.print('/');
   Serial.println(profileShowMaxMicros);
 
+#if WIFI_PORTAL_ENABLED
+  gStatRenderFps = (uint16_t)renderFps;
+  gStatLifeUps = (uint16_t)lifeUps;
+#endif
   fpsStartedAt = now;
   framesThisPeriod = 0;
   lifeStepsThisPeriod = 0;
@@ -1386,6 +1401,9 @@ void loop() {
     lastSimulationStepAt = millis();   // avoid a catch-up burst after the pause
     lastRenderAt = lastSimulationStepAt;
   }
+  if (gReqReseed) { gReqReseed = false; seedLife(); }
+  if (gReqBurn)   { gReqBurn = false; startBurnWave(); }
+  if (gReqForget) { gReqForget = false; WiFi.disconnect(true, true); delay(200); ESP.restart(); }
 #endif
   uint32_t loopStartedAt = micros();
   uint32_t accelStartedAt = loopStartedAt;
