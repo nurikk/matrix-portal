@@ -4,6 +4,7 @@
 #include <Wire.h>
 
 #include "life_bits.h"
+#include "life_settings.h"
 
 #if defined(ARDUINO_ADAFRUIT_MATRIXPORTAL_ESP32S3)
 // MatrixPortal S3 HUB75 pinout from Adafruit Protomatter's official example.
@@ -39,6 +40,19 @@ uint8_t oePin = 16;
 #define MATRIX_BENCHMARK 0
 #endif
 
+#if defined(ARDUINO_ADAFRUIT_MATRIXPORTAL_ESP32S3) && !MATRIX_BENCHMARK
+#define WIFI_PORTAL_ENABLED 1
+#else
+#define WIFI_PORTAL_ENABLED 0
+#endif
+
+#if WIFI_PORTAL_ENABLED
+#include <WiFi.h>
+#include "web_portal.h"
+extern volatile bool gShowIpScroll;
+extern char gIpText[32];
+#endif
+
 constexpr uint16_t kMatrixWidth = MATRIX_WIDTH;
 constexpr uint8_t kMatrixBitDepth = MATRIX_BIT_DEPTH;
 constexpr uint8_t kMatrixRgbChains = MATRIX_RGB_CHAINS;
@@ -63,35 +77,28 @@ Adafruit_LIS3DH accelerometer = Adafruit_LIS3DH();
 constexpr uint8_t kMaxWidth = MATRIX_WIDTH;
 constexpr uint8_t kMaxHeight = MATRIX_TILE < 0 ? 64 * -MATRIX_TILE : 64 * MATRIX_TILE;
 constexpr uint16_t kCellCount = kMaxWidth * kMaxHeight;
-constexpr uint16_t kMinLiveCells = 8;
 constexpr uint8_t kTypeCount = 6;
-// Render often, but let Life generations ooze forward with dense-birth drag.
-constexpr uint16_t kLifeStepMs = 100;
-constexpr uint16_t kBurnStepMs = 29;
-constexpr uint16_t kRenderFrameMs = 33;
-constexpr uint8_t kHueStep = 3;
-constexpr uint8_t kSatStep = 7;
-constexpr uint8_t kLiveValueStep = 10;
-constexpr uint8_t kDeathValueStep = 8;
-constexpr uint8_t kMediumChunkMass = 7;
-constexpr uint8_t kLargeChunkMass = 12;
-constexpr uint8_t kHugeChunkMass = 18;
 constexpr uint8_t kAccelAddressHigh = 0x19;
 constexpr uint8_t kAccelAddressLow = 0x18;
-constexpr uint8_t kAccelPollMs = 35;
-constexpr int16_t kTiltDeadzone = 650;
-constexpr int16_t kStrongTilt = 2500;
-constexpr uint16_t kShakeDelta = 10000;
-constexpr uint8_t kBurnRingWidth = 2;
-constexpr uint8_t kBurnFadeStep = 18;
-constexpr uint8_t kMotionGlowFadeStep = 3;
 constexpr uint8_t kClickAxisX = 0x01;
 constexpr uint8_t kClickAxisY = 0x02;
 constexpr uint8_t kClickSignNegative = 0x08;
 constexpr uint8_t kClickEventMask = 0x30;
 constexpr uint8_t kClickDouble = 0x20;
-constexpr int16_t kKnockAxisMinimumImpulse = 6000;
-constexpr int16_t kKnockImpulseFullScale = 18000;
+
+LifeSettings gLive = defaultLifeSettings();
+LifeSettings gSaved = defaultLifeSettings();
+LifeSettings gDefaults = defaultLifeSettings();   // non-const: external linkage so web_portal can extern it
+
+#if WIFI_PORTAL_ENABLED
+volatile bool gReqReseed = false;
+volatile bool gReqBurn = false;
+volatile bool gReqForget = false;
+volatile uint16_t gStatRenderFps = 0;
+volatile uint16_t gStatLifeUps = 0;
+int gGeoBitDepth = MATRIX_BIT_DEPTH;
+int gGeoTile = MATRIX_TILE;
+#endif
 
 struct Hsv {
   uint8_t h;
@@ -515,10 +522,10 @@ void renderFrame() {
       Hsv target = targetColorFor(index, x, y, alive);
       bool force = forceRedraw[index];
       forceRedraw[index] = false;
-      uint8_t nextHueValue = approachHue(visualHue[index], target.h, kHueStep);
-      uint8_t nextSatValue = approach(visualSat[index], target.s, kSatStep);
-      uint8_t valueStep = burnHeat[index] ? kLiveValueStep
-                                          : (alive ? kLiveValueStep : kDeathValueStep);
+      uint8_t nextHueValue = approachHue(visualHue[index], target.h, gLive.hueStep);
+      uint8_t nextSatValue = approach(visualSat[index], target.s, gLive.satStep);
+      uint8_t valueStep = burnHeat[index] ? gLive.liveValueStep
+                                          : (alive ? gLive.liveValueStep : gLive.deathValueStep);
       uint8_t nextValue = approach(visualValue[index], target.v, valueStep);
 
       if (!force && nextHueValue == visualHue[index] && nextSatValue == visualSat[index] &&
@@ -562,38 +569,38 @@ void recordKnockOrigin(uint8_t click, int16_t impulseX, int16_t impulseY) {
 
   if (click & kClickAxisX) {
     uint16_t magnitude = abs16(impulseX);
-    if (magnitude < kKnockAxisMinimumImpulse) {
-      magnitude = kKnockAxisMinimumImpulse;
-    } else if (magnitude > kKnockImpulseFullScale) {
-      magnitude = kKnockImpulseFullScale;
+    if (magnitude < gLive.knockAxisMinimumImpulse) {
+      magnitude = gLive.knockAxisMinimumImpulse;
+    } else if (magnitude > gLive.knockImpulseFullScale) {
+      magnitude = gLive.knockImpulseFullScale;
     }
     impulseX = clickSign * static_cast<int16_t>(magnitude);
   }
 
   if (click & kClickAxisY) {
     uint16_t magnitude = abs16(impulseY);
-    if (magnitude < kKnockAxisMinimumImpulse) {
-      magnitude = kKnockAxisMinimumImpulse;
-    } else if (magnitude > kKnockImpulseFullScale) {
-      magnitude = kKnockImpulseFullScale;
+    if (magnitude < gLive.knockAxisMinimumImpulse) {
+      magnitude = gLive.knockAxisMinimumImpulse;
+    } else if (magnitude > gLive.knockImpulseFullScale) {
+      magnitude = gLive.knockImpulseFullScale;
     }
     impulseY = clickSign * static_cast<int16_t>(magnitude);
   }
 
   if (!(click & (kClickAxisX | kClickAxisY)) &&
-      abs16(impulseX) + abs16(impulseY) < kKnockAxisMinimumImpulse) {
-    impulseX = static_cast<int16_t>(random32() % (kKnockAxisMinimumImpulse + 1)) -
-               (kKnockAxisMinimumImpulse / 2);
-    impulseY = static_cast<int16_t>(random32() % (kKnockAxisMinimumImpulse + 1)) -
-               (kKnockAxisMinimumImpulse / 2);
+      abs16(impulseX) + abs16(impulseY) < gLive.knockAxisMinimumImpulse) {
+    impulseX = static_cast<int16_t>(random32() % (gLive.knockAxisMinimumImpulse + 1)) -
+               (gLive.knockAxisMinimumImpulse / 2);
+    impulseY = static_cast<int16_t>(random32() % (gLive.knockAxisMinimumImpulse + 1)) -
+               (gLive.knockAxisMinimumImpulse / 2);
   }
 
   int16_t x = panelWidth / 2 -
               (static_cast<int32_t>(impulseX) * panelWidth) /
-                  kKnockImpulseFullScale;
+                  gLive.knockImpulseFullScale;
   int16_t y = panelHeight / 2 -
               (static_cast<int32_t>(impulseY) * panelHeight) /
-                  kKnockImpulseFullScale;
+                  gLive.knockImpulseFullScale;
   pendingBurnCenterX = clamp16(x, 0, panelWidth - 1);
   pendingBurnCenterY = clamp16(y, 0, panelHeight - 1);
 }
@@ -631,7 +638,7 @@ void startBurnWave() {
          burnEndRadius < 240) {
     burnEndRadius++;
   }
-  burnEndRadius += kBurnRingWidth + 8;
+  burnEndRadius += gLive.burnRingWidth + 8;
   clearBurnHeat();
   burnEventsThisPeriod++;
   raiseMotionGlow(255);
@@ -652,8 +659,8 @@ void stepBurnWave() {
   bool hasHeat = false;
   int16_t centerX = burnCenterX;
   int16_t centerY = burnCenterY;
-  uint8_t innerRadius = burnRadius > kBurnRingWidth ? burnRadius - kBurnRingWidth : 0;
-  uint8_t outerRadius = burnRadius + kBurnRingWidth;
+  uint8_t innerRadius = burnRadius > gLive.burnRingWidth ? burnRadius - gLive.burnRingWidth : 0;
+  uint8_t outerRadius = burnRadius + gLive.burnRingWidth;
   uint16_t killRadiusSquared = static_cast<uint16_t>(burnRadius) * burnRadius;
   uint16_t innerSquared = static_cast<uint16_t>(innerRadius) * innerRadius;
   uint16_t outerSquared = static_cast<uint16_t>(outerRadius) * outerRadius;
@@ -665,8 +672,8 @@ void stepBurnWave() {
     for (uint8_t x = 0; x < panelWidth; x++) {
       uint16_t index = baseIndex + x;
       uint8_t heat = burnHeat[index];
-      if (heat > kBurnFadeStep) {
-        heat -= kBurnFadeStep;
+      if (heat > gLive.burnFadeStep) {
+        heat -= gLive.burnFadeStep;
       } else {
         heat = 0;
       }
@@ -971,13 +978,13 @@ uint8_t localChunkMass(uint8_t x, uint8_t y) {
 }
 
 uint8_t chunkBirthCadence(uint8_t mass) {
-  if (mass >= kHugeChunkMass) {
+  if (mass >= gLive.hugeChunkMass) {
     return 4;
   }
-  if (mass >= kLargeChunkMass) {
+  if (mass >= gLive.largeChunkMass) {
     return 3;
   }
-  if (mass >= kMediumChunkMass) {
+  if (mass >= gLive.mediumChunkMass) {
     return 2;
   }
   return 1;
@@ -1125,11 +1132,11 @@ void stepLife() {
     nextRows[y] = nextRow & activeMask;
   }
   recountNextStats(nextLiveCells, nextChangedCells);
-  applyRandomEvents(nextChangedCells < 6 || nextLiveCells < kMinLiveCells);
+  applyRandomEvents(nextChangedCells < 6 || nextLiveCells < gLive.minLiveCells);
   applyInteractionEvents();
   recountNextStats(nextLiveCells, nextChangedCells);
 
-  if (nextLiveCells < kMinLiveCells) {
+  if (nextLiveCells < gLive.minLiveCells) {
     seedLife();
     return;
   }
@@ -1143,13 +1150,13 @@ void stepLife() {
 void updateTiltState() {
   uint16_t planar = abs16(accelX) + abs16(accelY);
   tiltStrength = planar > 8160 ? 255 : planar >> 5;
-  tiltDx = accelX > kTiltDeadzone ? 1 : (accelX < -kTiltDeadzone ? -1 : 0);
-  tiltDy = accelY > kTiltDeadzone ? 1 : (accelY < -kTiltDeadzone ? -1 : 0);
+  tiltDx = accelX > gLive.tiltDeadzone ? 1 : (accelX < -gLive.tiltDeadzone ? -1 : 0);
+  tiltDy = accelY > gLive.tiltDeadzone ? 1 : (accelY < -gLive.tiltDeadzone ? -1 : 0);
   tiltHueBias = clamp16((accelX + accelY) >> 8, -48, 48);
 
-  if (planar > kStrongTilt) {
+  if (planar > gLive.strongTilt) {
     raiseMotionGlow(55 + (tiltStrength >> 2));
-  } else if (planar > kTiltDeadzone * 2) {
+  } else if (planar > gLive.tiltDeadzone * 2) {
     raiseMotionGlow(28 + (tiltStrength >> 3));
   }
 }
@@ -1195,7 +1202,7 @@ void pollAccelerometer() {
   }
 
   uint32_t now = millis();
-  if (now - lastAccelReadAt < kAccelPollMs) {
+  if (now - lastAccelReadAt < gLive.accelPollMs) {
     return;
   }
   lastAccelReadAt = now;
@@ -1238,7 +1245,7 @@ void pollAccelerometer() {
     raiseMotionGlow(knocks == 2 ? 190 : 145);
   }
 
-  if (delta > kShakeDelta && now - lastShakeAt > 300) {
+  if (delta > gLive.shakeDelta && now - lastShakeAt > 300) {
     if (pendingShakes < 4) {
       pendingShakes++;
     }
@@ -1249,8 +1256,8 @@ void pollAccelerometer() {
 }
 
 void decayMotionEffects() {
-  if (motionGlow > kMotionGlowFadeStep) {
-    motionGlow -= kMotionGlowFadeStep;
+  if (motionGlow > gLive.motionGlowFadeStep) {
+    motionGlow -= gLive.motionGlowFadeStep;
   } else {
     motionGlow = 0;
   }
@@ -1313,6 +1320,10 @@ void reportFps() {
   Serial.print('/');
   Serial.println(profileShowMaxMicros);
 
+#if WIFI_PORTAL_ENABLED
+  gStatRenderFps = (uint16_t)renderFps;
+  gStatLifeUps = (uint16_t)lifeUps;
+#endif
   fpsStartedAt = now;
   framesThisPeriod = 0;
   lifeStepsThisPeriod = 0;
@@ -1339,6 +1350,9 @@ void setup() {
   }
 
   configureLifeBounds();
+#if WIFI_PORTAL_ENABLED
+  webPortalBegin();   // loads gSaved/gLive from NVS (defaults on first boot)
+#endif
   initAccelerometer();
   matrix.fillScreen(0);
   matrix.show();
@@ -1363,13 +1377,40 @@ void setup() {
   Serial.println(panelHeight);
 }
 
+#if WIFI_PORTAL_ENABLED
+void scrollIpOnce() {
+  matrix.setTextWrap(false);
+  matrix.setTextColor(color565(0, 255, 80));
+  int16_t textW = 6 * (int16_t)strlen(gIpText);   // default GFX font is 6px wide
+  for (int16_t x = panelWidth; x > -textW; x--) {
+    matrix.fillScreen(0);
+    matrix.setCursor(x, panelHeight / 2 - 4);
+    matrix.print(gIpText);
+    matrix.show();
+    delay(15);
+  }
+}
+#endif
+
 void loop() {
+#if WIFI_PORTAL_ENABLED
+  webPortalTick();
+  if (gShowIpScroll) {
+    gShowIpScroll = false;
+    scrollIpOnce();
+    lastSimulationStepAt = millis();   // avoid a catch-up burst after the pause
+    lastRenderAt = lastSimulationStepAt;
+  }
+  if (gReqReseed) { gReqReseed = false; seedLife(); }
+  if (gReqBurn)   { gReqBurn = false; startBurnWave(); }
+  if (gReqForget) { gReqForget = false; WiFi.disconnect(true, true); delay(200); ESP.restart(); }  // blocks ~200ms intentionally — device reboots immediately after
+#endif
   uint32_t loopStartedAt = micros();
   uint32_t accelStartedAt = loopStartedAt;
   pollAccelerometer();
   uint32_t lifeStartedAt = micros();
   uint32_t now = millis();
-  uint16_t simulationInterval = burnWaveActive ? kBurnStepMs : kLifeStepMs;
+  uint16_t simulationInterval = burnWaveActive ? gLive.burnStepMs : gLive.lifeStepMs;
   bool runSimulation = pendingKnocks || now - lastSimulationStepAt >= simulationInterval;
   bool rendered = false;
 
@@ -1380,7 +1421,7 @@ void loop() {
 
   uint32_t lifeEndedAt = micros();
 
-  if (runSimulation || now - lastRenderAt >= kRenderFrameMs) {
+  if (runSimulation || now - lastRenderAt >= gLive.renderFrameMs) {
     renderFrame();
     lastRenderAt = now;
     decayMotionEffects();
