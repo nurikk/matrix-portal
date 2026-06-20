@@ -26,6 +26,10 @@ int main() {
   clampSettings(c);
   CHECK(std::memcmp(&c, &d, sizeof(LifeSettings)) == 0, "defaults survive clamp");
 
+  // Two independent default structs must be byte-identical (padding must be deterministic).
+  LifeSettings d2 = defaultLifeSettings();
+  CHECK(std::memcmp(&d, &d2, sizeof(LifeSettings)) == 0, "two defaults are byte-identical");
+
   // applyLifeSettingField clamps to range and reports unknown keys.
   LifeSettings s = d;
   CHECK(applyLifeSettingField(s, "lifeStepMs", 5) && s.lifeStepMs == 10, "low clamp");

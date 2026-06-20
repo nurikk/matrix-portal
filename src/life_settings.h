@@ -43,7 +43,7 @@ inline long clampLong(long v, long lo, long hi) {
 }
 
 inline LifeSettings defaultLifeSettings() {
-  LifeSettings s;
+  LifeSettings s = {};   // zero-init (incl. padding) so defaults are byte-deterministic
 #define X(type, name, label, group, def, lo, hi, step) s.name = (type)(def);
   LIFE_SETTINGS_FIELDS(X)
 #undef X
