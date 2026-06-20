@@ -111,7 +111,7 @@ bootloader port, upload with `matrixportal_m4_bootloader`, which disables the to
 ## WiFi control panel (ESP32-S3)
 
 S3 Life builds include a browser-based control panel. M4 and all benchmark builds have
-no networking code.
+no networking code. The control panel and API are unauthenticated and intended for use on a trusted home LAN only.
 
 **First-boot WiFi provisioning** uses Espressif's WiFiProv over BLE. Install the
 **ESP BLE Provisioning** app (iOS or Android), scan for `PROV_MatrixLife`, and enter

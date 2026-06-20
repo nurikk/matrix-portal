@@ -30,7 +30,6 @@ extern int gGeoTile;
 void webServerStart();  // defined below; called from onWiFiEvent
 
 // --- connectivity state (read by main.cpp for the one-time IP scroll) ---
-volatile bool gWifiConnected = false;
 volatile bool gShowIpScroll = false;
 char gIpText[32] = {0};
 
@@ -56,13 +55,11 @@ void onWiFiEvent(arduino_event_t *e) {
       if (MDNS.begin(kMdnsHost)) {
         MDNS.addService("http", "tcp", 80);
       }
-      gWifiConnected = true;
       gShowIpScroll = true;       // main loop scrolls it once
       webServerStart();           // forward-declared above; defined below
       break;
     }
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-      gWifiConnected = false;
       WiFi.reconnect();
       break;
     default:

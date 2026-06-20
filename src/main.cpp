@@ -1403,7 +1403,7 @@ void loop() {
   }
   if (gReqReseed) { gReqReseed = false; seedLife(); }
   if (gReqBurn)   { gReqBurn = false; startBurnWave(); }
-  if (gReqForget) { gReqForget = false; WiFi.disconnect(true, true); delay(200); ESP.restart(); }
+  if (gReqForget) { gReqForget = false; WiFi.disconnect(true, true); delay(200); ESP.restart(); }  // blocks ~200ms intentionally — device reboots immediately after
 #endif
   uint32_t loopStartedAt = micros();
   uint32_t accelStartedAt = loopStartedAt;
