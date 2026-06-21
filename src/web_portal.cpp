@@ -32,6 +32,8 @@ extern int gGeoTile;
 // panel's RGB565 image into dst[panelWidth*panelHeight]. Reading it from core 0 is a
 // documented benign cross-core race (see the comment on the definition).
 void copyDrawnFrame(uint16_t *dst);
+size_t measureDrawnFrameRlePayload();
+size_t copyDrawnFrameRle(uint8_t *dst, size_t capacity);
 
 // Defined in life_sim.h (core 1). Injects browser-drawn cells from a tight row-major
 // bitmask into the current generation. Called ONLY from webPortalTick() on core 1 (which
@@ -141,10 +143,17 @@ constexpr uint32_t kStatsPushMs = 500;
 // the two never collide). Layout, all little-endian:
 //   [0]    magic 0x4C ('L')   [1] version   [2..3] width   [4..5] height
 //   [6..]  width*height RGB565 pixels, row-major (same bit layout as Adafruit GFX 565).
+// RLE frames use magic 'R', the same header, then repeated uint16 runLength + uint16 RGB565
+// color pairs. A frame is sent as RLE only when it is smaller than the raw RGB565 payload.
 constexpr uint32_t kFramePushMs = 100;     // ~10 fps board mirror — smooth, LAN-cheap
 constexpr uint8_t kFrameMagic = 0x4C;      // 'L'
+constexpr uint8_t kRleFrameMagic = 0x52;   // 'R'
 constexpr uint8_t kFrameVersion = 1;
 constexpr size_t kFrameHeaderBytes = 6;
+
+uint32_t gLastFrameBytes = 0;
+uint32_t gRawFrameBytes = 0;
+bool gLastFrameWasRle = false;
 
 // --- Browser-drawn cells (binary frames, browser → firmware) ---
 // Same 6-byte header layout as the download frame, but magic 'D'. The payload is a tight
@@ -207,6 +216,9 @@ void buildStatsDoc(JsonDocument &doc) {
   doc["live"] = (unsigned)liveCells;
   doc["generation"] = (unsigned long)generation;
   doc["uptimeMs"] = (unsigned long)millis();
+  doc["frameBytes"] = (unsigned long)gLastFrameBytes;
+  doc["rawFrameBytes"] = (unsigned long)gRawFrameBytes;
+  doc["frameEncoding"] = gLastFrameWasRle ? "rle" : "raw";
 }
 
 void publishPending(const LifeSettings &s) {
@@ -343,12 +355,40 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
 // Frames are ephemeral: if the heap can't hand us a contiguous block we just skip this one.
 void pushBoardFrame() {
   const size_t cells = (size_t)panelWidth * panelHeight;
-  const size_t total = kFrameHeaderBytes + cells * 2;
+  const size_t rawPayload = cells * 2;
+  const size_t rawTotal = kFrameHeaderBytes + rawPayload;
+  gRawFrameBytes = rawTotal;
+
+  size_t rlePayload = measureDrawnFrameRlePayload();
+  if (rlePayload > 0 && kFrameHeaderBytes + rlePayload < rawTotal) {
+    const size_t rleTotal = kFrameHeaderBytes + rlePayload;
+    if (ESP.getMaxAllocHeap() >= rleTotal + 512) {
+      AsyncWebSocketMessageBuffer *buf = gWs.makeBuffer(rleTotal);
+      if (buf && buf->length() == rleTotal) {
+        uint8_t *p = buf->get();
+        p[0] = kRleFrameMagic;
+        p[1] = kFrameVersion;
+        p[2] = (uint8_t)(panelWidth & 0xFF);
+        p[3] = (uint8_t)(panelWidth >> 8);
+        p[4] = (uint8_t)(panelHeight & 0xFF);
+        p[5] = (uint8_t)(panelHeight >> 8);
+        size_t actualPayload = copyDrawnFrameRle(p + kFrameHeaderBytes, rlePayload);
+        if (actualPayload == rlePayload) {
+          gLastFrameBytes = rleTotal;
+          gLastFrameWasRle = true;
+          gWs.binaryAll(buf);
+          return;
+        }
+      }
+      if (buf) delete buf;   // drawnColor changed between measure/encode; fall back to raw
+    }
+  }
+
   // Avoid the OOM-abort path: only allocate if a big-enough contiguous block exists.
-  if (ESP.getMaxAllocHeap() < total + 512) return;
-  AsyncWebSocketMessageBuffer *buf = gWs.makeBuffer(total);
+  if (ESP.getMaxAllocHeap() < rawTotal + 512) return;
+  AsyncWebSocketMessageBuffer *buf = gWs.makeBuffer(rawTotal);
   if (!buf) return;
-  if (buf->length() != total) { delete buf; return; }
+  if (buf->length() != rawTotal) { delete buf; return; }
 
   uint8_t *p = buf->get();
   p[0] = kFrameMagic;
@@ -361,6 +401,8 @@ void pushBoardFrame() {
   // writes inside copyDrawnFrame are well-aligned for Xtensa. Memory is little-endian, so
   // each RGB565 lands low-byte-first on the wire — matching the browser's Uint16Array read.
   copyDrawnFrame(reinterpret_cast<uint16_t *>(p + kFrameHeaderBytes));
+  gLastFrameBytes = rawTotal;
+  gLastFrameWasRle = false;
   gWs.binaryAll(buf);   // moves the shared buffer into each client's queue, then deletes buf
 }
 

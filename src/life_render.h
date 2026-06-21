@@ -124,4 +124,66 @@ void copyDrawnFrame(uint16_t *dst) {
     }
   }
 }
+
+size_t measureDrawnFrameRlePayload() {
+  size_t runs = 0;
+  bool haveRun = false;
+  uint16_t runColor = 0;
+  uint16_t runLength = 0;
+
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    const uint16_t *srcRow = &drawnColor[(uint16_t)y * kMaxWidth];
+    for (uint8_t x = 0; x < panelWidth; x++) {
+      uint16_t color = srcRow[x];
+      if (!haveRun || color != runColor || runLength == UINT16_MAX) {
+        runs++;
+        runColor = color;
+        runLength = 1;
+        haveRun = true;
+      } else {
+        runLength++;
+      }
+    }
+  }
+
+  return runs * 4;   // uint16 run length + uint16 RGB565 color, little-endian
+}
+
+bool writeDrawnFrameRleRun(uint8_t *dst, size_t capacity, size_t &out,
+                           uint16_t runLength, uint16_t color) {
+  if (out + 4 > capacity) return false;
+  dst[out++] = (uint8_t)(runLength & 0xFF);
+  dst[out++] = (uint8_t)(runLength >> 8);
+  dst[out++] = (uint8_t)(color & 0xFF);
+  dst[out++] = (uint8_t)(color >> 8);
+  return true;
+}
+
+size_t copyDrawnFrameRle(uint8_t *dst, size_t capacity) {
+  size_t out = 0;
+  bool haveRun = false;
+  uint16_t runColor = 0;
+  uint16_t runLength = 0;
+
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    const uint16_t *srcRow = &drawnColor[(uint16_t)y * kMaxWidth];
+    for (uint8_t x = 0; x < panelWidth; x++) {
+      uint16_t color = srcRow[x];
+      if (!haveRun) {
+        runColor = color;
+        runLength = 1;
+        haveRun = true;
+      } else if (color == runColor && runLength < UINT16_MAX) {
+        runLength++;
+      } else {
+        if (!writeDrawnFrameRleRun(dst, capacity, out, runLength, runColor)) return 0;
+        runColor = color;
+        runLength = 1;
+      }
+    }
+  }
+
+  if (haveRun && !writeDrawnFrameRleRun(dst, capacity, out, runLength, runColor)) return 0;
+  return out;
+}
 #endif

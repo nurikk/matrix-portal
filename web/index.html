@@ -1,59 +1,223 @@
 <!doctype html>
-<html>
+<html lang="en">
 
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#07090d">
     <title>MatrixLife</title>
     <style>
+        /* ============================================================
+           MatrixLife console — "Vivarium" theme.
+           Served from the ESP32 over LAN, so this file is fully
+           self-contained: no web fonts, no CDN, no external requests.
+           Personality comes from a monospace instrument voice; the only
+           color in the room is the living specimen + its heartbeat.
+           ============================================================ */
         :root {
-            color-scheme: dark
+            --void: #07090d;
+            --graphite: #10131a;
+            --graphite-2: #161a24;
+            --raised: #1b202c;
+            --line: #232a38;
+            --line-soft: #1a202c;
+            --ink: #e9ecf3;
+            --ink-dim: #9aa3b8;
+            --ink-faint: #626c81;
+            --live: #34e39b;
+            --live-soft: rgba(52, 227, 155, .14);
+            --ember: #ff6b3d;
+            --danger: #ff4d67;
+            --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+            --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            --r: 12px;
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        html {
+            -webkit-text-size-adjust: 100%
         }
 
         body {
-            font: 15px system-ui, sans-serif;
             margin: 0;
-            background: #0b0d12;
-            color: #e7e9ee
+            font: 400 14px/1.5 var(--sans);
+            color: var(--ink);
+            background:
+                radial-gradient(140% 90% at 22% -8%, #0d1018 0%, var(--void) 55%) fixed;
+            min-height: 100vh;
         }
 
-        header {
+        /* ---------- top bar ---------- */
+        .topbar {
             position: sticky;
             top: 0;
-            background: #12151c;
-            padding: 12px 16px;
-            border-bottom: 1px solid #232838;
-            z-index: 1
+            z-index: 5;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 12px 18px;
+            background: rgba(9, 11, 16, .82);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--line);
         }
 
-        h1 {
-            font-size: 16px;
-            margin: 0 0 4px
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-right: auto;
         }
 
-        .geo {
-            color: #8b93a7;
-            font-size: 12px
+        .glider {
+            width: 20px;
+            height: 20px;
+            filter: drop-shadow(0 0 5px rgba(52, 227, 155, .55));
         }
 
+        .glider rect {
+            fill: var(--live)
+        }
+
+        .wordmark {
+            font: 600 16px/1 var(--mono);
+            letter-spacing: .02em;
+            color: var(--ink);
+        }
+
+        .wordmark b {
+            color: var(--live);
+            font-weight: 600
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font: 500 11px/1 var(--mono);
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            color: var(--ink-dim);
+        }
+
+        .status .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--ink-faint);
+            box-shadow: 0 0 0 0 transparent;
+        }
+
+        .status[data-state=live] {
+            color: var(--live)
+        }
+
+        .status[data-state=live] .dot {
+            background: var(--live);
+            animation: pulse 2.4s ease-out infinite
+        }
+
+        .status[data-state=connecting] {
+            color: #e8c15a
+        }
+
+        .status[data-state=connecting] .dot {
+            background: #e8c15a;
+            animation: pulse 1s ease-out infinite
+        }
+
+        .status[data-state=down] {
+            color: var(--danger)
+        }
+
+        .status[data-state=down] .dot {
+            background: var(--danger)
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 currentColor
+            }
+
+            70%,
+            100% {
+                box-shadow: 0 0 0 7px transparent
+            }
+        }
+
+        .spec {
+            font: 500 11px/1 var(--mono);
+            letter-spacing: .06em;
+            color: var(--ink-faint);
+            white-space: nowrap;
+        }
+
+        @media (max-width: 560px) {
+            .spec {
+                display: none
+            }
+        }
+
+        @media (max-width: 360px) {
+            .wordmark {
+                font-size: 15px
+            }
+
+            .status {
+                font-size: 10px
+            }
+        }
+
+        /* ---------- layout ---------- */
         main {
-            padding: 16px;
-            max-width: 1100px;
-            margin: 0 auto
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 22px 18px 64px;
+            display: grid;
+            gap: 26px;
         }
 
-        .board-wrap {
+        @media (min-width: 920px) {
+            main {
+                grid-template-columns: minmax(0, 1fr) minmax(338px, 432px);
+                align-items: start;
+                gap: 34px;
+            }
+
+            .stage {
+                position: sticky;
+                top: 78px;
+            }
+        }
+
+        .stage {
             display: flex;
             flex-direction: column;
-            align-items: center;
-            gap: 12px;
-            margin: 0 0 16px
+            gap: 16px;
         }
 
-        .board-box {
-            position: relative;
+        /* ---------- the specimen ---------- */
+        .board-frame {
             width: 100%;
-            max-width: 480px
+            max-width: 560px;
+            margin: 0 auto;
+            padding: 12px;
+            border-radius: 18px;
+            background: radial-gradient(125% 120% at 50% 0%, #141925 0%, #0a0d14 78%);
+            border: 1px solid var(--line);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04), 0 28px 64px -28px rgba(0, 0, 0, .85);
+            transition: opacity .35s;
+        }
+
+        .screen {
+            position: relative;
+            border-radius: 9px;
+            overflow: hidden;
+            box-shadow: 0 0 46px -10px rgba(52, 227, 155, .16);
         }
 
         #board {
@@ -62,8 +226,6 @@
             height: auto;
             image-rendering: pixelated;
             background: #000;
-            border: 1px solid #232838;
-            border-radius: 10px
         }
 
         #overlay {
@@ -73,327 +235,1013 @@
             height: 100%;
             image-rendering: pixelated;
             touch-action: none;
-            cursor: crosshair
+            cursor: crosshair;
         }
 
-        /* Wide screens: two columns — config on the left, live canvas on the right.
-           The canvas is placed in column 2 (despite coming first in the DOM, so it
-           stacks on top when this grid collapses on narrow screens) and sticks in
-           view while the settings list scrolls. */
-        @media (min-width: 760px) {
-            main {
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) 380px;
-                gap: 20px;
-                align-items: start
-            }
-
-            #groups {
-                grid-column: 1;
-                grid-row: 1
-            }
-
-            .board-wrap {
-                grid-column: 2;
-                grid-row: 1;
-                position: sticky;
-                top: 84px;
-                margin: 0
-            }
+        body.offline .board-frame {
+            opacity: .5
         }
 
-        fieldset {
-            border: 1px solid #232838;
-            border-radius: 10px;
-            margin: 0 0 16px;
-            padding: 12px 14px
-        }
-
-        legend {
-            color: #9aa3ba;
-            padding: 0 6px;
+        .draw-hint {
+            margin: 0;
+            text-align: center;
+            font: 500 11px/1.4 var(--mono);
+            letter-spacing: .05em;
             text-transform: uppercase;
-            font-size: 11px;
-            letter-spacing: .06em
+            color: var(--ink-faint);
         }
 
-        .knob {
-            margin: 14px 0
+        .draw-hint b {
+            color: var(--ink-dim);
+            font-weight: 500
         }
 
-        .row {
-            display: grid;
-            grid-template-columns: 1fr 130px 64px;
-            gap: 10px;
-            align-items: center
+        /* ---------- vitals ---------- */
+        .vitals {
+            border: 1px solid var(--line);
+            border-radius: var(--r);
+            background: linear-gradient(180deg, var(--graphite-2), var(--graphite));
+            padding: 12px 14px 14px;
         }
 
-        .row label {
-            color: #cdd3e1
-        }
-
-        .desc {
-            color: #8b93a7;
-            font-size: 12px;
-            margin-top: 4px;
-            line-height: 1.4
-        }
-
-        .check {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            color: #cdd3e1;
-            cursor: pointer
-        }
-
-        .check input {
-            width: auto;
-            cursor: pointer
-        }
-
-        .ctl-check {
+        #spark {
+            display: block;
             width: 100%;
-            margin-top: 2px
+            height: 52px;
         }
 
-        input[type=range] {
-            width: 100%
+        .readouts {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+            margin-top: 10px;
         }
 
-        input[type=number] {
-            width: 60px;
-            background: #0b0d12;
-            color: #e7e9ee;
-            border: 1px solid #2c3346;
-            border-radius: 6px;
-            padding: 4px
+        @media (max-width: 480px) {
+            .readouts {
+                grid-template-columns: repeat(3, 1fr)
+            }
         }
 
-        .bar {
+        .readout {
             display: flex;
             flex-direction: column;
-            gap: 10px;
-            width: 100%;
-            max-width: 480px
-        }
-
-        .ctl {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            align-items: center
-        }
-
-        .ctl-label {
-            width: 100%;
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: .06em;
-            color: #6b7385
-        }
-
-        .palette {
-            width: 100%;
-            max-width: 480px;
+            gap: 3px;
             min-width: 0;
-            margin: 0
         }
 
+        /* clip rather than overlap if a cell ever gets too tight */
+        .readout .k {
+            font: 600 9.5px/1 var(--mono);
+            letter-spacing: .14em;
+            text-transform: uppercase;
+            color: var(--ink-faint);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .readout .v {
+            font: 500 18px/1 var(--mono);
+            font-variant-numeric: tabular-nums;
+            color: var(--ink);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .readout.is-pop .v {
+            color: var(--live)
+        }
+
+        /* transport diagnostics — a quiet caption, not a vital sign */
+        .link {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 13px;
+            padding-top: 12px;
+            border-top: 1px solid var(--line-soft);
+        }
+
+        .link-k {
+            flex: 0 0 auto;
+            font: 600 9.5px/1 var(--mono);
+            letter-spacing: .14em;
+            text-transform: uppercase;
+            color: var(--ink-faint);
+        }
+
+        .link-v {
+            font: 500 12px/1 var(--mono);
+            font-variant-numeric: tabular-nums;
+            color: var(--ink-dim);
+            white-space: nowrap;
+        }
+
+        .link-pct {
+            margin-left: auto;
+            flex: 0 0 auto;
+            font: 600 12px/1 var(--mono);
+            font-variant-numeric: tabular-nums;
+            color: var(--live);
+        }
+
+        /* ---------- buttons ---------- */
+        .btn {
+            font: 500 13px/1 var(--sans);
+            padding: 0 14px;
+            height: 40px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            border-radius: 9px;
+            border: 1px solid var(--line);
+            background: var(--raised);
+            color: var(--ink);
+            cursor: pointer;
+            transition: border-color .15s, background .15s, transform .04s;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .btn:hover {
+            border-color: #34405a;
+            background: #232b3b
+        }
+
+        .btn:active {
+            transform: translateY(1px)
+        }
+
+        .btn--go {
+            color: var(--live);
+            border-color: rgba(52, 227, 155, .42);
+            background: var(--live-soft);
+        }
+
+        .btn--go:hover {
+            border-color: var(--live);
+            background: rgba(52, 227, 155, .2)
+        }
+
+        .btn--ember {
+            color: var(--ember);
+            border-color: rgba(255, 107, 61, .4);
+            background: rgba(255, 107, 61, .1);
+        }
+
+        .btn--ember:hover {
+            border-color: var(--ember);
+            background: rgba(255, 107, 61, .18)
+        }
+
+        .btn--danger {
+            color: var(--danger);
+            border-color: rgba(255, 77, 103, .38);
+            background: transparent;
+        }
+
+        .btn--danger:hover {
+            border-color: var(--danger);
+            background: rgba(255, 77, 103, .12)
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 9px;
+        }
+
+        @media (min-width: 460px) {
+            .controls {
+                grid-template-columns: 1.3fr 1fr 1fr 1fr
+            }
+        }
+
+        /* ---------- mode switches ---------- */
+        .switches {
+            display: grid;
+            gap: 8px;
+        }
+
+        @media (min-width: 460px) {
+            .switches {
+                grid-template-columns: 1fr 1fr
+            }
+        }
+
+        .switch {
+            display: flex;
+            align-items: flex-start;
+            gap: 11px;
+            padding: 11px 13px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: var(--graphite);
+            cursor: pointer;
+            transition: border-color .15s;
+        }
+
+        .switch:has(input:checked) {
+            border-color: rgba(52, 227, 155, .4);
+            background: var(--live-soft);
+        }
+
+        .switch input {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .track {
+            position: relative;
+            flex: 0 0 auto;
+            width: 34px;
+            height: 20px;
+            margin-top: 1px;
+            border-radius: 11px;
+            background: #2a3346;
+            transition: background .18s;
+        }
+
+        .track::after {
+            content: "";
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #cfd6e6;
+            transition: transform .18s;
+        }
+
+        .switch input:checked+.track {
+            background: var(--live)
+        }
+
+        .switch input:checked+.track::after {
+            transform: translateX(14px);
+            background: #06291d
+        }
+
+        .switch input:focus-visible+.track {
+            outline: 2px solid var(--live);
+            outline-offset: 2px
+        }
+
+        .switch-text {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            font-weight: 500;
+            color: var(--ink);
+            line-height: 1.25;
+        }
+
+        .switch-text small {
+            font: 400 11.5px/1.35 var(--sans);
+            color: var(--ink-dim);
+        }
+
+        /* ---------- console panels ---------- */
+        .console {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .panel {
+            border: 1px solid var(--line);
+            border-radius: var(--r);
+            background: linear-gradient(180deg, var(--graphite-2), var(--graphite));
+            padding: 14px;
+        }
+
+        .panel-label {
+            display: flex;
+            align-items: baseline;
+            gap: 9px;
+            font: 600 11px/1 var(--mono);
+            letter-spacing: .14em;
+            text-transform: uppercase;
+            color: var(--ink-dim);
+            margin: 0 0 12px;
+        }
+
+        .panel-label .hint {
+            font: 400 11px/1 var(--sans);
+            letter-spacing: 0;
+            text-transform: none;
+            color: var(--ink-faint);
+        }
+
+        /* ---------- patterns ---------- */
         #patterns {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
-            gap: 8px
+            grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+            gap: 9px;
         }
 
         .pat {
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 4px;
-            padding: 6px;
-            border: 1px solid #232838;
-            border-radius: 8px;
-            background: #10131b;
+            gap: 6px;
+            padding: 8px 4px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: var(--graphite);
             cursor: grab;
             touch-action: none;
-            user-select: none
+            user-select: none;
+            -webkit-user-select: none;
+            transition: border-color .15s, background .15s;
+        }
+
+        .pat:hover {
+            border-color: #34405a
         }
 
         .pat:active {
             cursor: grabbing;
-            border-color: #2a6df4
+            border-color: var(--live);
+            background: var(--live-soft);
         }
 
         .pat canvas {
-            width: 60px;
-            height: 60px;
+            width: 52px;
+            height: 52px;
             image-rendering: pixelated;
-            background: #000;
-            border-radius: 4px
+            background: #05070a;
+            border-radius: 5px;
         }
 
         .pat span {
-            font-size: 11px;
-            color: #9aa3ba;
+            font: 500 10.5px/1.15 var(--sans);
+            color: var(--ink-dim);
             text-align: center;
-            line-height: 1.15
         }
 
-        button {
-            font: inherit;
-            padding: 8px 12px;
-            border-radius: 8px;
-            border: 1px solid #2c3346;
-            background: #1b2031;
-            color: #e7e9ee;
-            cursor: pointer
+        /* ---------- tuning groups (accordion) ---------- */
+        .group {
+            border: 1px solid var(--line);
+            border-radius: var(--r);
+            background: linear-gradient(180deg, var(--graphite-2), var(--graphite));
+            overflow: hidden;
         }
 
-        button.primary {
-            background: #2a6df4;
-            border-color: #2a6df4
+        .group+.group {
+            margin-top: 0
         }
 
-        button.warn {
-            background: #3a1d22;
-            border-color: #5a2b33;
-            color: #ffb3bd
+        .group-head {
+            list-style: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 13px 14px;
+            user-select: none;
+        }
+
+        .group-head::-webkit-details-marker {
+            display: none
+        }
+
+        .chev {
+            flex: 0 0 auto;
+            width: 8px;
+            height: 8px;
+            border-right: 1.6px solid var(--ink-dim);
+            border-bottom: 1.6px solid var(--ink-dim);
+            transform: rotate(-45deg);
+            transition: transform .18s;
+        }
+
+        details[open]>.group-head .chev {
+            transform: rotate(45deg)
+        }
+
+        .group-name {
+            font: 600 12.5px/1 var(--mono);
+            letter-spacing: .04em;
+            color: var(--ink);
+        }
+
+        .group-count {
+            margin-left: auto;
+            font: 500 10px/1 var(--mono);
+            letter-spacing: .1em;
+            color: var(--ink-faint);
+        }
+
+        .group-body {
+            padding: 0 14px 6px;
+        }
+
+        .group-hint {
+            margin: -2px 0 10px;
+            font: 400 12px/1.4 var(--sans);
+            color: var(--ink-faint);
+        }
+
+        /* ---------- one tuning knob ---------- */
+        .knob {
+            padding: 12px 0;
+            border-top: 1px solid var(--line-soft);
+        }
+
+        .knob-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 9px;
+        }
+
+        .knob-head .label {
+            font-weight: 500;
+            color: var(--ink);
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+
+        .knob-head .label .changed-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--live);
+            opacity: 0;
+            transition: opacity .15s;
+            box-shadow: 0 0 6px rgba(52, 227, 155, .7);
+        }
+
+        .knob.changed .changed-dot {
+            opacity: 1
+        }
+
+        .num {
+            margin-left: auto;
+            width: 64px;
+            background: var(--void);
+            color: var(--ink);
+            border: 1px solid var(--line);
+            border-radius: 7px;
+            padding: 6px 7px;
+            font: 500 13px/1 var(--mono);
+            font-variant-numeric: tabular-nums;
+            text-align: right;
+        }
+
+        .num:focus-visible {
+            outline: 2px solid var(--live);
+            outline-offset: 1px;
+            border-color: var(--live);
+        }
+
+        .desc {
+            margin: 8px 0 0;
+            font: 400 12px/1.45 var(--sans);
+            color: var(--ink-faint);
+        }
+
+        /* range slider */
+        input[type=range] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 22px;
+            background: transparent;
+            cursor: pointer;
+            margin: 0;
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            height: 4px;
+            border-radius: 3px;
+            background: #2a3346;
+        }
+
+        input[type=range]::-moz-range-track {
+            height: 4px;
+            border-radius: 3px;
+            background: #2a3346;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            margin-top: -7px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: var(--live);
+            border: 3px solid #0c1118;
+            box-shadow: 0 0 10px -1px rgba(52, 227, 155, .6);
+        }
+
+        input[type=range]::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: var(--live);
+            border: 3px solid #0c1118;
+            box-shadow: 0 0 10px -1px rgba(52, 227, 155, .6);
+        }
+
+        input[type=range]:focus-visible::-webkit-slider-thumb {
+            outline: 2px solid var(--live);
+            outline-offset: 2px
+        }
+
+        input[type=range]:focus-visible::-moz-range-thumb {
+            outline: 2px solid var(--live);
+            outline-offset: 2px
+        }
+
+        /* ---------- device block ---------- */
+        .device-actions {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 9px;
+        }
+
+        .save {
+            position: relative
+        }
+
+        .save.dirty {
+            color: var(--live);
+            border-color: rgba(52, 227, 155, .42);
+            background: var(--live-soft);
+        }
+
+        .save .badge {
+            display: none;
+            min-width: 17px;
+            height: 17px;
+            padding: 0 4px;
+            border-radius: 9px;
+            background: var(--live);
+            color: #06291d;
+            font: 600 10px/17px var(--mono);
+        }
+
+        .save.dirty .badge {
+            display: inline-block
+        }
+
+        .device-note {
+            margin: 11px 0 16px;
+            font: 400 12px/1.5 var(--sans);
+            color: var(--ink-faint);
+        }
+
+        .device-note:last-child {
+            margin-bottom: 0
+        }
+
+        .spec-list {
+            margin: 0 0 14px;
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 6px 14px;
+        }
+
+        .spec-list dt {
+            font: 500 11px/1.5 var(--mono);
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            color: var(--ink-faint);
+        }
+
+        .spec-list dd {
+            margin: 0;
+            font: 500 12.5px/1.5 var(--mono);
+            font-variant-numeric: tabular-nums;
+            color: var(--ink-dim);
+            text-align: right;
+        }
+
+        .hr {
+            height: 1px;
+            background: var(--line);
+            margin: 16px -14px;
+        }
+
+        .btn:focus-visible,
+        .pat:focus-visible {
+            outline: 2px solid var(--live);
+            outline-offset: 2px;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+
+            *,
+            *::after,
+            *::before {
+                animation: none !important;
+                transition: none !important;
+            }
         }
     </style>
 </head>
 
-<body>
-    <header>
-        <h1>MatrixLife control panel</h1>
-        <div class="geo" id="geo"></div>
-        <div class="geo" id="stats"></div>
+<body class="offline">
+    <header class="topbar">
+        <div class="brand">
+            <svg class="glider" viewBox="0 0 3 3" aria-hidden="true">
+                <rect x="1" y="0" width="1" height="1" />
+                <rect x="2" y="1" width="1" height="1" />
+                <rect x="0" y="2" width="1" height="1" />
+                <rect x="1" y="2" width="1" height="1" />
+                <rect x="2" y="2" width="1" height="1" />
+            </svg>
+            <span class="wordmark">matrix<b>life</b></span>
+        </div>
+        <div class="status" id="status" data-state="connecting">
+            <span class="dot"></span><span id="connText">connecting</span>
+        </div>
+        <span class="spec" id="spec"></span>
     </header>
+
     <main>
-        <div class="board-wrap">
-            <div class="board-box"><canvas id="board" width="64" height="64"></canvas><canvas id="overlay" width="64" height="64"></canvas></div>
-            <div class="bar">
-                <div class="ctl">
-                    <span class="ctl-label">Board</span>
-                    <button onclick="act('stop')">Stop</button>
-                    <button onclick="act('resume')">Resume</button>
-                    <button onclick="act('reseed')">Reseed</button>
-                    <button onclick="act('clear')">Clear all</button>
-                    <button onclick="act('burn')">Burn</button>
-                    <label class="check ctl-check"><input type="checkbox" id="reseedToggle"><span>Disable auto-reseed</span></label>
-                    <label class="check ctl-check"><input type="checkbox" id="fadeToggle"><span>Classic (no fade)</span></label>
+        <!-- STAGE: the living specimen + the controls you reach for most -->
+        <section class="stage">
+            <div>
+                <div class="board-frame">
+                    <div class="screen">
+                        <canvas id="board" width="64" height="64" aria-label="Live Game of Life board"></canvas>
+                        <canvas id="overlay" width="64" height="64" aria-label="Drag here to draw living cells onto the board"></canvas>
+                    </div>
                 </div>
-                <div class="ctl">
-                    <span class="ctl-label">Settings</span>
-                    <button class="primary" onclick="act('save')">Save</button>
-                    <button onclick="act('revert')">Revert</button>
-                    <button onclick="act('reset')">Reset</button>
+                <p class="draw-hint">Drag on the board to <b>draw living cells</b></p>
+            </div>
+
+            <div class="vitals" aria-label="Live telemetry">
+                <canvas id="spark"></canvas>
+                <div class="readouts">
+                    <div class="readout is-pop"><span class="k">Alive</span><span class="v" id="vPop">—</span></div>
+                    <div class="readout"><span class="k">Gen</span><span class="v" id="vGen">—</span></div>
+                    <div class="readout"><span class="k">FPS</span><span class="v" id="vFps">—</span></div>
+                    <div class="readout"><span class="k">Sim/s</span><span class="v" id="vUps">—</span></div>
+                    <div class="readout"><span class="k">Uptime</span><span class="v" id="vUp">—</span></div>
                 </div>
-                <div class="ctl">
-                    <span class="ctl-label">Device</span>
-                    <button class="warn" onclick="forget()">Forget WiFi</button>
+                <div class="link" id="link" title="Live board frame over WebSocket">
+                    <span class="link-k">Stream</span>
+                    <span class="link-v" id="vWsText">—</span>
+                    <span class="link-pct" id="vWsPct"></span>
                 </div>
             </div>
-            <fieldset class="palette">
-                <legend>Patterns — drag onto the board</legend>
+
+            <div class="controls">
+                <button class="btn" id="playBtn" type="button">Pause</button>
+                <button class="btn" type="button" onclick="act('reseed')">Reseed</button>
+                <button class="btn" type="button" onclick="act('clear')">Clear</button>
+                <button class="btn btn--ember" type="button" onclick="act('burn')">Burn</button>
+            </div>
+
+            <div class="switches" id="switches">
+                <label class="switch">
+                    <input type="checkbox" id="swReseed">
+                    <span class="track"></span>
+                    <span class="switch-text">Classic Conway<small>Evolve untouched and let it die — no reseeds or random spawns.</small></span>
+                </label>
+                <label class="switch">
+                    <input type="checkbox" id="swFade">
+                    <span class="track"></span>
+                    <span class="switch-text">No fade<small>Cells snap fully on or off — no color fade.</small></span>
+                </label>
+            </div>
+        </section>
+
+        <!-- CONSOLE: patterns, deep tuning, and device management -->
+        <section class="console">
+            <div class="panel">
+                <p class="panel-label">Patterns <span class="hint">drag onto the board</span></p>
                 <div id="patterns"></div>
-            </fieldset>
-        </div>
-        <div id="groups"></div>
+            </div>
+
+            <div id="groups"></div>
+
+            <div class="panel">
+                <p class="panel-label">Tuning</p>
+                <div class="device-actions">
+                    <button class="btn save" id="saveBtn" type="button" onclick="act('save')">Save <span class="badge" id="saveBadge">0</span></button>
+                    <button class="btn" type="button" onclick="act('revert')">Revert</button>
+                    <button class="btn" type="button" onclick="act('reset')">Reset</button>
+                </div>
+                <p class="device-note">Save writes the current tuning to the panel's flash so it survives a reboot. Revert restores the last save; Reset loads factory defaults.</p>
+
+                <div class="hr"></div>
+
+                <p class="panel-label">Device</p>
+                <dl class="spec-list" id="specList"></dl>
+                <button class="btn btn--danger" type="button" style="width:100%" onclick="forget()" aria-describedby="forgetNote">Forget WiFi</button>
+                <p class="device-note" id="forgetNote">Erases the saved network and reboots into Bluetooth setup. You'll need the ESP BLE Provisioning app to reconnect.</p>
+            </div>
+        </section>
     </main>
+
     <script>
+        // ============================================================
+        // Small DOM + util helpers
+        // ============================================================
         function el(t, a = {}, ...k) { const e = document.createElement(t); for (const x in a) e.setAttribute(x, a[x]); e.append(...k); return e; }
         function debounce(fn, ms) { let h; return (...a) => { clearTimeout(h); h = setTimeout(() => fn(...a), ms); }; }
+        const $ = id => document.getElementById(id);
 
         let ws;
-        let myClientId = null;  // assigned from the schema message; used to ignore our own echoes
-        const controls = {};   // key -> { num, rng }
-        let bctx, bimg;         // board canvas 2d context + cached ImageData (rebuilt on resize)
+        let myClientId = null;          // assigned from the schema message; used to ignore our own echoes
+        const controls = {};            // key -> { kind, read(), setVal(v), knob }
+        const savedVals = {};           // key -> value last persisted to flash (the dirty baseline)
+        let panelCells = 64 * 64;
+        let bctx, bimg;                 // board canvas 2d context + cached ImageData (rebuilt on resize)
 
+        // ============================================================
+        // WebSocket plumbing — protocol is identical to the firmware:
+        //   text frames  = JSON control (schema / stats / set echo)
+        //   binary frames = board image ('L' raw or 'R' RLE) in, drawn cells ('D') out
+        // ============================================================
         function send(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
         const sendField = debounce((key, value) => send({ type: 'set', key, value }), 120);
         function act(action) { send({ type: 'action', action }); }
-        function forget() { if (confirm('Erase WiFi credentials and reboot into BLE provisioning?')) act('forget'); }
+        function forget() { if (confirm('Erase WiFi credentials and reboot into Bluetooth setup?')) act('forget'); }
 
-        function buildSchema(data) {
-            document.getElementById('geo').textContent =
-                `panel ${data.geometry.width}×${data.geometry.height} · ${data.geometry.bitDepth}-bit · tile ${data.geometry.tile} (compile-time)`;
-            const byGroup = {}; data.fields.forEach(f => (byGroup[f.group] = byGroup[f.group] || []).push(f));
-            const root = document.getElementById('groups'); root.innerHTML = '';
-            for (const k in controls) delete controls[k];
-            for (const g in byGroup) {
-                const fs = el('fieldset', {}, el('legend', {}, g));
-                byGroup[g].forEach(f => {
-                    if (f.key === 'disableReseed' || f.key === 'noFade') return;   // shown in the Board control group instead
-                    const knob = el('div', { class: 'knob' });
-                    if (f.min === 0 && f.max === 1 && f.step === 1) {   // boolean field -> checkbox
-                        const cb = el('input', { type: 'checkbox' }); cb.checked = !!f.live;
-                        cb.onchange = () => sendField(f.key, cb.checked ? 1 : 0);
-                        controls[f.key] = { cb };
-                        knob.append(el('label', { class: 'check' }, cb, el('span', {}, f.label)));
-                    } else {
-                        const num = el('input', { type: 'number', min: f.min, max: f.max, step: f.step, value: f.live });
-                        const rng = el('input', { type: 'range', min: f.min, max: f.max, step: f.step, value: f.live });
-                        const apply = v => { v = Math.max(f.min, Math.min(f.max, +v)); num.value = v; rng.value = v; sendField(f.key, v); };
-                        rng.oninput = () => apply(rng.value); num.oninput = () => apply(num.value);
-                        controls[f.key] = { num, rng };
-                        knob.append(el('div', { class: 'row' }, el('label', {}, f.label), rng, num));
-                    }
-                    if (f.desc) knob.append(el('div', { class: 'desc' }, f.desc));
-                    fs.append(knob);
-                });
-                root.append(fs);
-            }
-            // These two toggles live as checkboxes in the Board control group (handy for the
-            // clear-then-watch workflow), not in the settings list. Wire them from the schema here.
-            [['disableReseed', 'reseedToggle'], ['noFade', 'fadeToggle']].forEach(([key, id]) => {
-                const cb = document.getElementById(id), fld = data.fields.find(f => f.key === key);
-                if (cb && fld) { cb.checked = !!fld.live; cb.onchange = () => sendField(key, cb.checked ? 1 : 0); controls[key] = { cb }; }
-            });
+        function setConn(state) {
+            const map = { live: 'live', connecting: 'connecting', down: 'reconnecting' };
+            $('status').dataset.state = state;
+            $('connText').textContent = map[state] || state;
+            document.body.classList.toggle('offline', state !== 'live');
         }
 
-        function applyRemoteSet(key, value) { const c = controls[key]; if (!c) return; if (c.cb) c.cb.checked = !!value; else { c.num.value = value; c.rng.value = value; } }
-        function showStats(s) { document.getElementById('stats').textContent = `${s.renderFps} fps · ${s.lifeUps} ups · ${s.live} live · gen ${s.generation}`; }
+        // ============================================================
+        // Schema → build the tuning console
+        // ============================================================
+        // Render groups in a deliberate order; unknown groups fall in afterwards.
+        const GROUP_ORDER = ['Simulation', 'Color/fade', 'Density', 'Burn wave', 'Knock', 'Accelerometer'];
+        const GROUP_TITLE = {
+            'Simulation': 'Simulation', 'Color/fade': 'Color & fade', 'Density': 'Density throttle',
+            'Burn wave': 'Burn wave', 'Knock': 'Knock detection', 'Accelerometer': 'Accelerometer'
+        };
+        const GROUP_HINT = {
+            'Simulation': 'Tempo and survival of the colony.',
+            'Color/fade': 'How cells take on color and fade in and out.',
+            'Density': 'Throttle births inside crowded clusters so blobs don’t run away.',
+            'Burn wave': 'The fire that sweeps the board when you knock the panel.',
+            'Knock': 'How hard a tap has to be to set off a burn.',
+            'Accelerometer': 'How often the motion sensor is read.'
+        };
+        const OPEN_BY_DEFAULT = 2;   // first N groups start expanded
 
-        // Binary board frame: 6-byte header (magic 'L', version, width, height; little-endian)
-        // followed by width*height RGB565 pixels. Expand 565 -> 888 with bit replication and
-        // blit onto the canvas at native resolution (CSS scales it up, pixelated).
-        function onBoardFrame(buf) {
-            const dv = new DataView(buf);
-            if (buf.byteLength < 6 || dv.getUint8(0) !== 0x4C) return;
-            const w = dv.getUint16(2, true), h = dv.getUint16(4, true);
-            const cells = w * h;
-            if (buf.byteLength < 6 + cells * 2) return;
-            const cv = document.getElementById('board');
+        // disableReseed / noFade are surfaced as the two Stage switches, not as sliders.
+        const STAGE_TOGGLES = { disableReseed: 'swReseed', noFade: 'swFade' };
+
+        function buildSchema(data) {
+            panelCells = data.geometry.width * data.geometry.height || panelCells;
+            $('spec').textContent =
+                `${data.geometry.width}×${data.geometry.height} · ${data.geometry.bitDepth}-bit · tile ${data.geometry.tile}`;
+
+            // Size the canvases to the real panel right away so any cells drawn before the
+            // first board frame arrives still carry matching dimensions (the firmware drops
+            // 'D' frames whose w/h don't equal the panel exactly).
+            const bw = data.geometry.width, bh = data.geometry.height, cv = $('board');
+            if (bw && bh && (cv.width !== bw || cv.height !== bh)) { cv.width = bw; cv.height = bh; bimg = null; syncOverlay(); }
+
+            // Device spec list
+            const sl = $('specList'); sl.innerHTML = '';
+            const specRows = [
+                ['Panel', `${data.geometry.width}×${data.geometry.height}`],
+                ['Bit depth', `${data.geometry.bitDepth}-bit`],
+                ['Tile', `${data.geometry.tile}`],
+                ['Address', location.host || 'matrixportal.local'],
+            ];
+            specRows.forEach(([k, v]) => { sl.append(el('dt', {}, k), el('dd', {}, v)); });
+
+            // Reset control registry, then group the tunable fields.
+            for (const k in controls) delete controls[k];
+            for (const k in savedVals) delete savedVals[k];
+            const byGroup = {};
+            data.fields.forEach(f => { savedVals[f.key] = f.saved; (byGroup[f.group] = byGroup[f.group] || []).push(f); });
+
+            const groupNames = Object.keys(byGroup).sort((a, b) => {
+                const ia = GROUP_ORDER.indexOf(a), ib = GROUP_ORDER.indexOf(b);
+                return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+            });
+
+            const root = $('groups'); root.innerHTML = '';
+            let shown = 0;
+            groupNames.forEach(g => {
+                const fields = byGroup[g].filter(f => !(f.key in STAGE_TOGGLES));
+                if (!fields.length) return;   // a group that's only stage-toggles (none today) — skip
+                const det = el('details', { class: 'group' });
+                if (shown < OPEN_BY_DEFAULT) det.setAttribute('open', '');
+                shown++;
+                const head = el('summary', { class: 'group-head' },
+                    el('span', { class: 'chev' }),
+                    el('span', { class: 'group-name' }, GROUP_TITLE[g] || g),
+                    el('span', { class: 'group-count' }, `${fields.length}`));
+                const body = el('div', { class: 'group-body' });
+                if (GROUP_HINT[g]) body.append(el('p', { class: 'group-hint' }, GROUP_HINT[g]));
+                fields.forEach(f => body.append(buildKnob(f)));
+                det.append(head, body);
+                root.append(det);
+            });
+
+            // Wire the two Stage switches from the schema.
+            for (const key in STAGE_TOGGLES) {
+                const cb = $(STAGE_TOGGLES[key]); const fld = data.fields.find(f => f.key === key);
+                if (cb && fld) {
+                    cb.checked = !!fld.live;
+                    cb.onchange = () => { sendField(key, cb.checked ? 1 : 0); refreshDirty(); };
+                    controls[key] = { kind: 'bool', read: () => cb.checked ? 1 : 0, setVal: v => cb.checked = !!v, knob: null };
+                }
+            }
+            refreshDirty();
+        }
+
+        function buildKnob(f) {
+            const knob = el('div', { class: 'knob' });
+            const isBool = f.min === 0 && f.max === 1 && f.step === 1;
+            if (isBool) {
+                const cb = el('input', { type: 'checkbox' }); cb.checked = !!f.live;
+                const sw = el('label', { class: 'switch' }, cb, el('span', { class: 'track' }),
+                    el('span', { class: 'switch-text' }, f.label));
+                cb.onchange = () => { sendField(f.key, cb.checked ? 1 : 0); refreshDirty(); };
+                controls[f.key] = { kind: 'bool', read: () => cb.checked ? 1 : 0, setVal: v => cb.checked = !!v, knob };
+                knob.append(sw);
+            } else {
+                const num = el('input', { class: 'num', type: 'number', min: f.min, max: f.max, step: f.step, value: f.live });
+                const rng = el('input', { type: 'range', min: f.min, max: f.max, step: f.step, value: f.live });
+                const apply = v => { v = Math.max(f.min, Math.min(f.max, +v)); num.value = v; rng.value = v; sendField(f.key, v); refreshDirty(); };
+                rng.oninput = () => apply(rng.value); num.oninput = () => apply(num.value);
+                controls[f.key] = { kind: 'num', read: () => +num.value, setVal: v => { num.value = v; rng.value = v; }, knob };
+                knob.append(
+                    el('div', { class: 'knob-head' },
+                        el('span', { class: 'label' }, f.label, el('span', { class: 'changed-dot', title: 'Changed since last save' })),
+                        num),
+                    rng);
+            }
+            if (f.desc) knob.append(el('p', { class: 'desc' }, f.desc));
+            return knob;
+        }
+
+        // Mark every knob that differs from its last-saved value, and surface the count on Save.
+        function refreshDirty() {
+            let n = 0;
+            for (const k in controls) {
+                const c = controls[k]; const changed = c.read() !== savedVals[k];
+                if (c.knob) c.knob.classList.toggle('changed', changed);
+                if (changed) n++;
+            }
+            const save = $('saveBtn');
+            save.classList.toggle('dirty', n > 0);
+            $('saveBadge').textContent = n;
+        }
+
+        function applyRemoteSet(key, value) {
+            const c = controls[key]; if (!c) return;
+            c.setVal(value); refreshDirty();
+        }
+
+        // ============================================================
+        // Live telemetry: readouts + the population sparkline (the signature)
+        // ============================================================
+        let running = true, lastGen = null;
+        function setRunningUI() {
+            const b = $('playBtn');
+            b.textContent = running ? 'Pause' : 'Resume';
+            b.classList.toggle('btn--go', !running);   // green when pressing it brings the colony back to life
+        }
+        $('playBtn').onclick = () => { running = !running; act(running ? 'resume' : 'stop'); setRunningUI(); };
+
+        function fmtUptime(ms) {
+            const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60;
+            const p = n => String(n).padStart(2, '0');
+            return h ? `${h}:${p(m)}:${p(ss)}` : `${p(m)}:${p(ss)}`;
+        }
+
+        function fmtBytes(n) { return n >= 1024 ? `${(n / 1024).toFixed(1)}k` : `${n}b`; }
+
+        function showStats(s) {
+            $('vPop').textContent = s.live;
+            $('vGen').textContent = (s.generation > 99999) ? (s.generation / 1000).toFixed(0) + 'k' : s.generation;
+            $('vFps').textContent = s.renderFps;
+            $('vUps').textContent = s.lifeUps;
+            $('vUp').textContent = fmtUptime(s.uptimeMs);
+            if (s.frameBytes) {
+                const enc = (s.frameEncoding || 'raw').toLowerCase();
+                const raw = s.rawFrameBytes || s.frameBytes;
+                const saved = Math.max(0, Math.round((1 - s.frameBytes / raw) * 100));
+                $('vWsText').textContent = `${enc} · ${fmtBytes(s.frameBytes)}/frame`;
+                $('vWsPct').textContent = saved > 0 ? `${saved}% smaller` : '';
+                $('link').title = `${s.frameBytes} B/frame vs ${raw} B raw — ${saved}% saved by ${enc}`;
+            }
+            pushPop(s.live);
+            // Let observed motion CONFIRM the colony is running, but never force "paused" on a
+            // flat reading: a slow sim (large life-step) may not advance between two stat samples,
+            // and a paused-by-another-tab case is rare. This keeps the toggle from lying mid-run.
+            if (lastGen !== null && s.generation > lastGen) running = true;
+            lastGen = s.generation;
+            setRunningUI();
+        }
+
+        const spark = $('spark'), sctx = spark.getContext('2d');
+        const POP_N = 160; let pop = [];
+        function pushPop(v) { pop.push(v); if (pop.length > POP_N) pop.shift(); drawSpark(); }
+        function drawSpark() {
+            const dpr = Math.min(2, window.devicePixelRatio || 1);
+            const w = spark.clientWidth, h = spark.clientHeight;
+            if (!w || !h) return;
+            if (spark.width !== (w * dpr | 0) || spark.height !== (h * dpr | 0)) { spark.width = w * dpr; spark.height = h * dpr; }
+            sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            sctx.clearRect(0, 0, w, h);
+            // faint baseline
+            sctx.strokeStyle = 'rgba(255,255,255,.05)'; sctx.lineWidth = 1;
+            sctx.beginPath(); sctx.moveTo(0, h - 1.5); sctx.lineTo(w, h - 1.5); sctx.stroke();
+            if (pop.length < 2) return;
+            let mx = 8; for (const v of pop) if (v > mx) mx = v;
+            const n = pop.length, pad = 4;
+            const X = i => w - (n - 1 - i) / (POP_N - 1) * w;
+            const Y = v => (h - pad) - (v / mx) * (h - pad * 2);
+            // area
+            sctx.beginPath(); sctx.moveTo(X(0), h);
+            for (let i = 0; i < n; i++) sctx.lineTo(X(i), Y(pop[i]));
+            sctx.lineTo(X(n - 1), h); sctx.closePath();
+            const grad = sctx.createLinearGradient(0, 0, 0, h);
+            grad.addColorStop(0, 'rgba(52,227,155,.30)'); grad.addColorStop(1, 'rgba(52,227,155,0)');
+            sctx.fillStyle = grad; sctx.fill();
+            // trace with phosphor glow
+            sctx.beginPath();
+            for (let i = 0; i < n; i++) { const px = X(i), py = Y(pop[i]); i ? sctx.lineTo(px, py) : sctx.moveTo(px, py); }
+            sctx.lineWidth = 1.6; sctx.strokeStyle = '#34e39b';
+            sctx.shadowColor = 'rgba(52,227,155,.7)'; sctx.shadowBlur = 6; sctx.stroke(); sctx.shadowBlur = 0;
+            // leading dot
+            sctx.fillStyle = '#aef7d5'; sctx.beginPath(); sctx.arc(X(n - 1), Y(pop[n - 1]), 2.2, 0, 7); sctx.fill();
+        }
+        window.addEventListener('resize', debounce(drawSpark, 120));
+
+        // ============================================================
+        // Board frame in: 6-byte header (magic, version, w, h; LE). Raw 'L' carries w*h
+        // RGB565 pixels; RLE 'R' carries repeated uint16 run length + uint16 RGB565 pairs.
+        // ============================================================
+        function ensureBoardImage(w, h) {
+            const cv = $('board');
             if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; bimg = null; syncOverlay(); }
             if (!bctx) bctx = cv.getContext('2d');
             if (!bimg) bimg = bctx.createImageData(w, h);
-            // Wire format is little-endian; Uint16Array reads in host byte order, which is
-            // little-endian on every browser platform this panel runs on (x86/ARM). Fast path.
-            const px = new Uint16Array(buf, 6, cells);   // RGB565
-            const d = bimg.data;
-            for (let i = 0, j = 0; i < cells; i++, j += 4) {
-                const c = px[i], r5 = (c >> 11) & 0x1f, g6 = (c >> 5) & 0x3f, b5 = c & 0x1f;
-                d[j] = (r5 << 3) | (r5 >> 2); d[j + 1] = (g6 << 2) | (g6 >> 4); d[j + 2] = (b5 << 3) | (b5 >> 2); d[j + 3] = 255;
-            }
-            bctx.putImageData(bimg, 0, 0);
-            if (clearOnNextFrame) { clearOnNextFrame = false; clearOverlay(); }   // echo arrived; drop the preview
+            return bimg.data;
         }
 
-        // --- Draw-on-canvas: paint cells on a transparent overlay stacked over #board, then
-        // push the whole stroke to the firmware as one binary frame on pointer up. The overlay's
-        // native size always tracks the board's so cells line up pixel-for-pixel.
-        const overlay = document.getElementById('overlay');
-        const octx = overlay.getContext('2d');
-        let painted = new Set();      // cells painted this stroke, keyed y*w+x (dedupes)
-        let drawing = false, lastX = 0, lastY = 0;
-        let clearOnNextFrame = false; // after a send, keep preview until the next board frame echoes it
+        function put565(d, i, c) {
+            const j = i * 4, r5 = (c >> 11) & 0x1f, g6 = (c >> 5) & 0x3f, b5 = c & 0x1f;
+            d[j] = (r5 << 3) | (r5 >> 2); d[j + 1] = (g6 << 2) | (g6 >> 4); d[j + 2] = (b5 << 3) | (b5 >> 2); d[j + 3] = 255;
+        }
 
-        function syncOverlay() { overlay.width = document.getElementById('board').width; overlay.height = document.getElementById('board').height; redrawPreview(); }
+        function onBoardFrame(buf) {
+            const dv = new DataView(buf);
+            if (buf.byteLength < 6 || dv.getUint8(1) !== 1) return;
+            const magic = dv.getUint8(0);
+            const w = dv.getUint16(2, true), h = dv.getUint16(4, true);
+            const cells = w * h;
+            const d = ensureBoardImage(w, h);
+
+            if (magic === 0x4C) {
+                if (buf.byteLength < 6 + cells * 2) return;
+                const px = new Uint16Array(buf, 6, cells);   // host LE matches the wire on x86/ARM
+                for (let i = 0; i < cells; i++) put565(d, i, px[i]);
+            } else if (magic === 0x52) {
+                if ((buf.byteLength - 6) % 4) return;
+                let i = 0;
+                for (let p = 6; p < buf.byteLength; p += 4) {
+                    const run = dv.getUint16(p, true), color = dv.getUint16(p + 2, true);
+                    if (!run || i + run > cells) return;
+                    for (let end = i + run; i < end; i++) put565(d, i, color);
+                }
+                if (i !== cells) return;
+            } else {
+                return;
+            }
+            bctx.putImageData(bimg, 0, 0);
+            if (clearOnNextFrame) { clearOnNextFrame = false; clearOverlay(); }
+        }
+
+        // ============================================================
+        // Draw on the board: paint on a transparent overlay, then push the
+        // whole stroke as one 'D' binary frame on pointer-up.
+        // ============================================================
+        const overlay = $('overlay'), octx = overlay.getContext('2d');
+        const PAINT = 'rgba(174,247,213,.95)', GHOST = 'rgba(110,210,255,.85)';
+        let painted = new Set(), drawing = false, lastX = 0, lastY = 0, clearOnNextFrame = false;
+
+        function syncOverlay() { overlay.width = $('board').width; overlay.height = $('board').height; redrawPreview(); }
         function clearOverlay() { octx.clearRect(0, 0, overlay.width, overlay.height); }
-        function redrawPreview() { clearOverlay(); octx.fillStyle = 'rgba(255,255,255,0.9)'; painted.forEach(k => octx.fillRect(k % overlay.width, (k / overlay.width) | 0, 1, 1)); }
+        function redrawPreview() { clearOverlay(); octx.fillStyle = PAINT; painted.forEach(k => octx.fillRect(k % overlay.width, (k / overlay.width) | 0, 1, 1)); }
 
-        function eventCell(e) {   // CSS-upscaled client coords -> native cell coords, clamped
+        function eventCell(e) {
             const r = overlay.getBoundingClientRect();
             const x = Math.floor((e.clientX - r.left) / r.width * overlay.width);
             const y = Math.floor((e.clientY - r.top) / r.height * overlay.height);
@@ -411,10 +1259,8 @@
                 if (e2 <= dx) { err += dx; y0 += sy; }
             }
         }
-
-        // Build + send one 'D' frame from an iterable of bit indices (each = y*w+x). Shared by
-        // freehand drawing and pattern drops. Sends only when non-empty and the socket is open.
-        function sendBits(bits) {   // magic 'D', v1, w/h u16 LE, then row-major LSB-first bitmask
+        // Build + send one 'D' frame from bit indices (each = y*w+x). w/h must match the panel exactly.
+        function sendBits(bits) {
             const w = overlay.width, h = overlay.height, buf = new ArrayBuffer(6 + Math.ceil(w * h / 8));
             const dv = new DataView(buf); dv.setUint8(0, 0x44); dv.setUint8(1, 0x01); dv.setUint16(2, w, true); dv.setUint16(4, h, true);
             const mask = new Uint8Array(buf, 6); let n = 0;
@@ -422,42 +1268,42 @@
             if (n && ws && ws.readyState === WebSocket.OPEN) ws.send(buf);
             return n;
         }
-        function sendFrame() { sendBits(painted); }   // freehand stroke — painted holds y*w+x keys
+        function sendFrame() { sendBits(painted); }
 
-        overlay.onpointerdown = e => { e.preventDefault(); overlay.setPointerCapture(e.pointerId); drawing = true; clearOnNextFrame = false; painted = new Set(); octx.fillStyle = 'rgba(255,255,255,0.9)'; clearOverlay(); [lastX, lastY] = eventCell(e); paint(lastX, lastY); };
+        overlay.onpointerdown = e => { e.preventDefault(); overlay.setPointerCapture(e.pointerId); drawing = true; clearOnNextFrame = false; painted = new Set(); octx.fillStyle = PAINT; clearOverlay(); [lastX, lastY] = eventCell(e); paint(lastX, lastY); };
         overlay.onpointermove = e => { if (!drawing) return; e.preventDefault(); const [x, y] = eventCell(e); paintLine(lastX, lastY, x, y); lastX = x; lastY = y; };
-        const endStroke = e => { if (!drawing) return; e.preventDefault(); drawing = false; sendFrame(); clearOnNextFrame = painted.size > 0; };   // keep preview until firmware echoes
+        const endStroke = e => { if (!drawing) return; e.preventDefault(); drawing = false; sendFrame(); clearOnNextFrame = painted.size > 0; };
         overlay.onpointerup = endStroke; overlay.onpointercancel = endStroke;
         syncOverlay();
 
-        // --- Pattern palette: drag a known Life formation onto the board. A pattern is just a set
-        // of relative cells; dropping it sends the same 'D' frame freehand draw uses, centered on
-        // the drop cell and wrapped toroidally (matching the sim). No firmware change — just cells.
+        // ============================================================
+        // Pattern palette: drag a known Life formation onto the board. Dropping
+        // sends the same 'D' frame, centered on the drop cell, wrapped toroidally.
+        // ============================================================
         const PATTERNS = [
-            { name: 'Glider', cells: [[1,0],[2,1],[0,2],[1,2],[2,2]] },
-            { name: 'LWSS', cells: [[1,0],[4,0],[0,1],[0,2],[4,2],[0,3],[1,3],[2,3],[3,3]] },
-            { name: 'Blinker', cells: [[0,0],[1,0],[2,0]] },
-            { name: 'Toad', cells: [[1,0],[2,0],[3,0],[0,1],[1,1],[2,1]] },
-            { name: 'Beacon', cells: [[0,0],[1,0],[0,1],[1,1],[2,2],[3,2],[2,3],[3,3]] },
-            { name: 'Pulsar', cells: [[2,0],[3,0],[4,0],[8,0],[9,0],[10,0],[0,2],[5,2],[7,2],[12,2],[0,3],[5,3],[7,3],[12,3],[0,4],[5,4],[7,4],[12,4],[2,5],[3,5],[4,5],[8,5],[9,5],[10,5],[2,7],[3,7],[4,7],[8,7],[9,7],[10,7],[0,8],[5,8],[7,8],[12,8],[0,9],[5,9],[7,9],[12,9],[0,10],[5,10],[7,10],[12,10],[2,12],[3,12],[4,12],[8,12],[9,12],[10,12]] },
-            { name: 'Pentadecathlon', cells: [[2,0],[7,0],[0,1],[1,1],[3,1],[4,1],[5,1],[6,1],[8,1],[9,1],[2,2],[7,2]] },
-            { name: 'Block', cells: [[0,0],[1,0],[0,1],[1,1]] },
-            { name: 'Beehive', cells: [[1,0],[2,0],[0,1],[3,1],[1,2],[2,2]] },
-            { name: 'Loaf', cells: [[1,0],[2,0],[0,1],[3,1],[1,2],[3,2],[2,3]] },
-            { name: 'Boat', cells: [[0,0],[1,0],[0,1],[2,1],[1,2]] },
-            { name: 'Gosper gun', cells: [[24,0],[22,1],[24,1],[12,2],[13,2],[20,2],[21,2],[34,2],[35,2],[11,3],[15,3],[20,3],[21,3],[34,3],[35,3],[0,4],[1,4],[10,4],[16,4],[20,4],[21,4],[0,5],[1,5],[10,5],[14,5],[16,5],[17,5],[22,5],[24,5],[10,6],[16,6],[24,6],[11,7],[15,7],[12,8],[13,8]] },
+            { name: 'Glider', cells: [[1, 0], [2, 1], [0, 2], [1, 2], [2, 2]] },
+            { name: 'LWSS', cells: [[1, 0], [4, 0], [0, 1], [0, 2], [4, 2], [0, 3], [1, 3], [2, 3], [3, 3]] },
+            { name: 'Blinker', cells: [[0, 0], [1, 0], [2, 0]] },
+            { name: 'Toad', cells: [[1, 0], [2, 0], [3, 0], [0, 1], [1, 1], [2, 1]] },
+            { name: 'Beacon', cells: [[0, 0], [1, 0], [0, 1], [1, 1], [2, 2], [3, 2], [2, 3], [3, 3]] },
+            { name: 'Pulsar', cells: [[2, 0], [3, 0], [4, 0], [8, 0], [9, 0], [10, 0], [0, 2], [5, 2], [7, 2], [12, 2], [0, 3], [5, 3], [7, 3], [12, 3], [0, 4], [5, 4], [7, 4], [12, 4], [2, 5], [3, 5], [4, 5], [8, 5], [9, 5], [10, 5], [2, 7], [3, 7], [4, 7], [8, 7], [9, 7], [10, 7], [0, 8], [5, 8], [7, 8], [12, 8], [0, 9], [5, 9], [7, 9], [12, 9], [0, 10], [5, 10], [7, 10], [12, 10], [2, 12], [3, 12], [4, 12], [8, 12], [9, 12], [10, 12]] },
+            { name: 'Pentadecathlon', cells: [[2, 0], [7, 0], [0, 1], [1, 1], [3, 1], [4, 1], [5, 1], [6, 1], [8, 1], [9, 1], [2, 2], [7, 2]] },
+            { name: 'Block', cells: [[0, 0], [1, 0], [0, 1], [1, 1]] },
+            { name: 'Beehive', cells: [[1, 0], [2, 0], [0, 1], [3, 1], [1, 2], [2, 2]] },
+            { name: 'Loaf', cells: [[1, 0], [2, 0], [0, 1], [3, 1], [1, 2], [3, 2], [2, 3]] },
+            { name: 'Boat', cells: [[0, 0], [1, 0], [0, 1], [2, 1], [1, 2]] },
+            { name: 'Gosper gun', cells: [[24, 0], [22, 1], [24, 1], [12, 2], [13, 2], [20, 2], [21, 2], [34, 2], [35, 2], [11, 3], [15, 3], [20, 3], [21, 3], [34, 3], [35, 3], [0, 4], [1, 4], [10, 4], [16, 4], [20, 4], [21, 4], [0, 5], [1, 5], [10, 5], [14, 5], [16, 5], [17, 5], [22, 5], [24, 5], [10, 6], [16, 6], [24, 6], [11, 7], [15, 7], [12, 8], [13, 8]] },
         ];
-        const GHOST = 'rgba(122,215,255,0.85)';
 
         function patternBox(cells) { let w = 0, h = 0; for (const [x, y] of cells) { if (x + 1 > w) w = x + 1; if (y + 1 > h) h = y + 1; } return [w, h]; }
-        function drawThumb(cv, cells) {   // render a pattern into its thumbnail, integer-scaled + centered
+        function drawThumb(cv, cells) {
             const ctx = cv.getContext('2d'), S = cv.width, [w, h] = patternBox(cells);
             const scale = Math.max(1, Math.floor(Math.min(S / w, S / h)));
             const ox = ((S - w * scale) / 2) | 0, oy = ((S - h * scale) / 2) | 0;
-            ctx.clearRect(0, 0, S, S); ctx.fillStyle = '#8fd6ff';
+            ctx.clearRect(0, 0, S, S); ctx.fillStyle = '#5ef0b0';
+            ctx.shadowColor = 'rgba(52,227,155,.6)'; ctx.shadowBlur = 3;
             for (const [x, y] of cells) ctx.fillRect(ox + x * scale, oy + y * scale, scale, scale);
         }
-        // Center a pattern on board cell (cx,cy), wrapped toroidally into the panel.
         function patternAt(cells, cx, cy) {
             const W = overlay.width, H = overlay.height, [w, h] = patternBox(cells);
             const ox = cx - (w >> 1), oy = cy - (h >> 1);
@@ -465,19 +1311,29 @@
         }
         function overBoard(e) { const r = overlay.getBoundingClientRect(); return e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.bottom; }
 
+        // Keyboard / non-drag path: drop a pattern at the center of the board. Lets the focusable
+        // pattern tiles actually be operated with Enter/Space, not just dragged with a pointer.
+        function placePatternCenter(p) {
+            const cells = patternAt(p.cells, overlay.width >> 1, overlay.height >> 1);
+            clearOverlay(); octx.fillStyle = GHOST;
+            for (const [x, y] of cells) octx.fillRect(x, y, 1, 1);
+            sendBits(cells.map(([x, y]) => y * overlay.width + x));
+            clearOnNextFrame = true;
+        }
+
         let dragPattern = null;
-        function ghostPattern(e) {   // preview the pattern on the overlay under the cursor
+        function ghostPattern(e) {
             if (!dragPattern) return;
             const [cx, cy] = eventCell(e); clearOverlay(); octx.fillStyle = GHOST;
             for (const [x, y] of patternAt(dragPattern.cells, cx, cy)) octx.fillRect(x, y, 1, 1);
         }
         function endPatternDrag(e, item, cancelled) {
-            if (!dragPattern) return;   // already ended (e.g. lostpointercapture firing right after pointerup)
+            if (!dragPattern) return;
             item.onpointermove = item.onpointerup = item.onpointercancel = item.onlostpointercapture = null;
             if (!cancelled && overBoard(e)) {
                 const [cx, cy] = eventCell(e);
                 sendBits(patternAt(dragPattern.cells, cx, cy).map(([x, y]) => y * overlay.width + x));
-                clearOnNextFrame = true;   // keep the ghost until the firmware echoes the cells back
+                clearOnNextFrame = true;
             } else { clearOverlay(); }
             dragPattern = null;
         }
@@ -488,20 +1344,24 @@
             item.onpointermove = ev => { ev.preventDefault(); ghostPattern(ev); };
             item.onpointerup = ev => { ev.preventDefault(); endPatternDrag(ev, item, false); };
             item.onpointercancel = ev => endPatternDrag(ev, item, true);
-            item.onlostpointercapture = ev => endPatternDrag(ev, item, true);   // safety net if capture drops without up/cancel
+            item.onlostpointercapture = ev => endPatternDrag(ev, item, true);
             ghostPattern(e);
         }
         (function buildPalette() {
-            const root = document.getElementById('patterns');
+            const root = $('patterns');
             PATTERNS.forEach(p => {
-                const cv = el('canvas', { width: 60, height: 60 });
+                const cv = el('canvas', { width: 52, height: 52 });
                 drawThumb(cv, p.cells);
-                const item = el('div', { class: 'pat', title: p.name }, cv, el('span', {}, p.name));
+                const item = el('div', { class: 'pat', title: p.name, tabindex: '0', role: 'button', 'aria-label': `Place ${p.name} at board center` }, cv, el('span', {}, p.name));
                 item.onpointerdown = e => startPatternDrag(e, p);
+                item.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); placePatternCenter(p); } };
                 root.append(item);
             });
         })();
 
+        // ============================================================
+        // Message routing + connection lifecycle
+        // ============================================================
         function onMessage(ev) {
             if (typeof ev.data !== 'string') { onBoardFrame(ev.data); return; }   // binary = board frame
             let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
@@ -512,9 +1372,10 @@
 
         function connect() {
             ws = new WebSocket(`ws://${location.host}/ws`);
-            ws.binaryType = 'arraybuffer';   // board frames arrive as ArrayBuffer, not Blob
+            ws.binaryType = 'arraybuffer';
+            ws.onopen = () => setConn('live');
             ws.onmessage = onMessage;
-            ws.onclose = () => setTimeout(connect, 1000);   // auto-reconnect
+            ws.onclose = () => { setConn('down'); setTimeout(connect, 1000); };
             ws.onerror = () => { try { ws.close(); } catch (e) { } };
         }
         connect();
