@@ -269,11 +269,13 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
 }
 
 // Core-0 task: broadcast ephemeral stats every kStatsPushMs and reap dead clients.
-// textAll drops the frame for any client whose per-client queue is full (ESP32Async
-// caps it) — exactly right for stats: a backed-up tab simply misses a tick.
+// Backpressure: gate on availableForWriteAll() and skip the whole tick if any client is
+// backed up (stats are ephemeral — the next tick supersedes them). We use all-or-nothing
+// availableForWriteAll() rather than per-client canSend(), because per-client gating needs
+// gWs.getClients() iteration, which would race cleanupClients().
 void wsPushTask(void *) {
   for (;;) {
-    if (gWs.count() > 0) {
+    if (gWs.count() > 0 && gWs.availableForWriteAll()) {
       JsonDocument doc;
       buildStatsDoc(doc);
       String out;

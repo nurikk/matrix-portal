@@ -116,8 +116,9 @@ no networking code. The control panel and API are unauthenticated and intended f
 **First-boot WiFi provisioning** uses Espressif's WiFiProv over BLE. Install the
 **ESP BLE Provisioning** app (iOS or Android), scan for `PROV_MatrixLife`, and enter
 proof-of-possession `matrixlife`. Credentials are written to NVS and never hardcoded;
-BT memory is freed automatically after provisioning. To re-provision, send
-`POST /api/forget-wifi` from the panel (erases NVS creds and reboots).
+BT memory is freed automatically after provisioning. To re-provision, press the
+**Forget WiFi** button in the control panel (sends `{"type":"action","action":"forget"}`
+over the WebSocket, which erases NVS credentials and reboots the device).
 
 **Reaching the panel:** after connecting, the device advertises mDNS as
 `matrixportal.local` and scrolls its IP address across the panel once. Open
