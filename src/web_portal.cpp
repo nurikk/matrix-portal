@@ -214,12 +214,10 @@ bool dispatchWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t
     echo["type"] = "set";
     echo["key"] = key;
     echo["value"] = applied;
+    echo["from"] = client->id();
     String out;
     serializeJson(echo, out);
-    // getClients() returns std::list<AsyncWebSocketClient> (not pointers), so iterate by ref.
-    for (auto &c : gWs.getClients()) {
-      if (&c != client && c.canSend()) c.text(out);
-    }
+    gWs.textAll(out);
     return true;
   }
 
@@ -250,6 +248,7 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
     case WS_EVT_CONNECT: {
       JsonDocument doc;
       buildSchemaDoc(doc);
+      doc["clientId"] = client->id();   // tell the client its own id so it can filter its echoes
       String out;
       serializeJson(doc, out);
       client->text(out);
