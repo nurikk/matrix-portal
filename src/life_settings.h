@@ -6,6 +6,7 @@
 // X(type, name, label, group, default, min, max, step, desc)
 // `desc` is a human-readable explanation surfaced under each slider in the web UI.
 // Keep desc ASCII and free of double-quotes (it is emitted into JSON as-is).
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -64,6 +65,51 @@ inline void clampSettings(LifeSettings &s) {
 inline bool applyLifeSettingField(LifeSettings &s, const char *key, long value) {
 #define X(type, name, label, group, def, lo, hi, step, desc) \
   if (strcmp(key, #name) == 0) { s.name = (type)clampLong(value, (long)(lo), (long)(hi)); return true; }
+  LIFE_SETTINGS_FIELDS(X)
+#undef X
+  return false;
+}
+
+// Per-field metadata as a pure data table (no ArduinoJson, no Arduino). The web portal
+// walks this to build JSON; the X-macro stays format-agnostic.
+//
+// static constexpr (not inline constexpr): this header is included into the main.cpp and
+// web_portal.cpp TUs. inline-constexpr *variables* are C++17-only and platformio.ini does
+// not pin -std, so we use static constexpr — internal linkage per TU, ODR-safe in C++11+.
+// A TU that doesn't reference the table optimizes it away under -O3.
+struct LifeFieldMeta {
+  const char *key;
+  const char *label;
+  const char *group;
+  const char *desc;
+  long min;
+  long max;
+  long step;
+};
+
+static constexpr LifeFieldMeta kLifeFieldMeta[] = {
+#define X(type, name, label, group, def, lo, hi, step, desc) \
+  { #name, label, group, desc, (long)(lo), (long)(hi), (long)(step) },
+  LIFE_SETTINGS_FIELDS(X)
+#undef X
+};
+
+static constexpr size_t kLifeFieldCount = sizeof(kLifeFieldMeta) / sizeof(kLifeFieldMeta[0]);
+
+// Read field `i`'s current value from a settings instance as a long.
+inline long getLifeSettingByIndex(const LifeSettings &s, size_t i) {
+  size_t j = 0;
+#define X(type, name, label, group, def, lo, hi, step, desc) \
+  if (j++ == i) return (long)s.name;
+  LIFE_SETTINGS_FIELDS(X)
+#undef X
+  return 0;
+}
+
+// Read a field's current value by key. Returns false (and leaves *out untouched) if unknown.
+inline bool getLifeSettingByKey(const LifeSettings &s, const char *key, long *out) {
+#define X(type, name, label, group, def, lo, hi, step, desc) \
+  if (strcmp(key, #name) == 0) { *out = (long)s.name; return true; }
   LIFE_SETTINGS_FIELDS(X)
 #undef X
   return false;

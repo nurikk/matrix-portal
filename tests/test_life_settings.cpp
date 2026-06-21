@@ -37,6 +37,25 @@ int main() {
   CHECK(applyLifeSettingField(s, "lifeStepMs", 250) && s.lifeStepMs == 250, "in range");
   CHECK(!applyLifeSettingField(s, "nope", 1), "unknown key rejected");
 
+  // --- field-metadata table (pure, ArduinoJson-free) ---
+  CHECK(kLifeFieldCount > 0, "non-empty field table");
+
+  bool foundLifeStep = false;
+  for (size_t i = 0; i < kLifeFieldCount; i++) {
+    if (std::strcmp(kLifeFieldMeta[i].key, "lifeStepMs") == 0) {
+      foundLifeStep = true;
+      CHECK(kLifeFieldMeta[i].min == 10 && kLifeFieldMeta[i].max == 1000 &&
+            kLifeFieldMeta[i].step == 5, "lifeStepMs range/step");
+      CHECK(kLifeFieldMeta[i].desc[0] != '\0', "lifeStepMs has desc");
+      CHECK(getLifeSettingByIndex(d, i) == 100, "lifeStepMs default via index");
+    }
+  }
+  CHECK(foundLifeStep, "metadata has lifeStepMs");
+
+  long byKey = -1;
+  CHECK(getLifeSettingByKey(d, "hueStep", &byKey) && byKey == 3, "by-key hueStep default");
+  CHECK(!getLifeSettingByKey(d, "nope", &byKey), "by-key unknown rejected");
+
   // Serialized JSON mentions a known key and its default value.
   char buf[8192];
   size_t n = serializeSettingsJson(d, d, d, buf, sizeof(buf));
