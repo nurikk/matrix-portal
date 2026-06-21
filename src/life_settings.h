@@ -1,11 +1,13 @@
 #pragma once
 // Pure, host-testable runtime tuning knobs for the Game of Life simulation.
 // Everything is generated from one X-macro field list so the struct, defaults,
-// metadata, clamping, apply-by-key, and JSON serializer can never drift apart.
+// clamping, apply-by-key, and the field-metadata table can never drift apart.
+// This header is dependency-free (no Arduino/ArduinoJson); the web portal walks
+// the metadata table to build JSON with ArduinoJson, so no serializer lives here.
 //
 // X(type, name, label, group, default, min, max, step, desc)
 // `desc` is a human-readable explanation surfaced under each slider in the web UI.
-// Keep desc ASCII and free of double-quotes (it is emitted into JSON as-is).
+// Keep desc ASCII; the portal serializes it to JSON with ArduinoJson (which escapes it).
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
