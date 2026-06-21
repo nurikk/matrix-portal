@@ -8,7 +8,6 @@
 // Keep desc ASCII and free of double-quotes (it is emitted into JSON as-is).
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 
 #define LIFE_SETTINGS_FIELDS(X)                                                                                                                                  \
@@ -115,29 +114,3 @@ inline bool getLifeSettingByKey(const LifeSettings &s, const char *key, long *ou
   return false;
 }
 
-// Emit JSON: {"fields":[{key,label,group,min,max,step,live,saved,default,desc}, ...]}.
-// snprintf semantics: returns the number of bytes that *would* be written.
-inline size_t serializeSettingsJson(const LifeSettings &live, const LifeSettings &saved,
-                                    const LifeSettings &defaults, char *out, size_t cap) {
-  size_t n = 0;
-#define APPEND(...)                                                              \
-  do {                                                                           \
-    int w = snprintf(out + (n < cap ? n : cap), (n < cap ? cap - n : 0), __VA_ARGS__); \
-    if (w > 0) n += (size_t)w;                                                   \
-  } while (0)
-  APPEND("{\"fields\":[");
-  bool first = true;
-#define X(type, name, label, group, def, lo, hi, step, desc)                     \
-  APPEND("%s{\"key\":\"%s\",\"label\":\"%s\",\"group\":\"%s\","                  \
-         "\"min\":%ld,\"max\":%ld,\"step\":%ld,"                                 \
-         "\"live\":%ld,\"saved\":%ld,\"default\":%ld,\"desc\":\"%s\"}",          \
-         first ? "" : ",", #name, label, group,                                  \
-         (long)(lo), (long)(hi), (long)(step),                                   \
-         (long)live.name, (long)saved.name, (long)defaults.name, desc);          \
-  first = false;
-  LIFE_SETTINGS_FIELDS(X)
-#undef X
-  APPEND("]}");
-#undef APPEND
-  return n;
-}

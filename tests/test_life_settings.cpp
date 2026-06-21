@@ -56,14 +56,6 @@ int main() {
   CHECK(getLifeSettingByKey(d, "hueStep", &byKey) && byKey == 3, "by-key hueStep default");
   CHECK(!getLifeSettingByKey(d, "nope", &byKey), "by-key unknown rejected");
 
-  // Serialized JSON mentions a known key and its default value.
-  char buf[8192];
-  size_t n = serializeSettingsJson(d, d, d, buf, sizeof(buf));
-  CHECK(n > 0 && n < sizeof(buf), "serialize fits buffer");
-  CHECK(std::strstr(buf, "\"key\":\"lifeStepMs\"") != nullptr, "json has lifeStepMs");
-  CHECK(std::strstr(buf, "\"default\":100") != nullptr, "json has default 100");
-  CHECK(std::strstr(buf, "\"desc\":\"") != nullptr, "json has per-field desc");
-
   if (g_failures == 0) std::printf("ALL SETTINGS TESTS PASSED\n");
   return g_failures ? 1 : 0;
 }
