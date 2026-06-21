@@ -134,9 +134,9 @@
     </header>
     <main id="groups"></main>
     <div class="bar">
-        <button class="primary" onclick="post('/api/save')">Save</button>
-        <button onclick="post('/api/revert')">Revert to saved</button>
-        <button onclick="post('/api/reset')">Reset to defaults</button>
+        <button class="primary" onclick="act('save')">Save</button>
+        <button onclick="act('revert')">Revert to saved</button>
+        <button onclick="act('reset')">Reset to defaults</button>
         <button onclick="act('reseed')">Reseed</button>
         <button onclick="act('burn')">Burn</button>
         <button class="warn" onclick="forget()">Forget WiFi</button>
@@ -144,11 +144,22 @@
     <script>
         function el(t, a = {}, ...k) { const e = document.createElement(t); for (const x in a) e.setAttribute(x, a[x]); e.append(...k); return e; }
         function debounce(fn, ms) { let h; return (...a) => { clearTimeout(h); h = setTimeout(() => fn(...a), ms); }; }
-        const sendField = debounce((key, val) => { fetch('/api/settings', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: key + '=' + val }).catch(() => { }); }, 120);
-        function build(data) {
-            document.getElementById('geo').textContent = `panel ${data.geometry.width}×${data.geometry.height} · ${data.geometry.bitDepth}-bit · tile ${data.geometry.tile} (compile-time)`;
-            const byGroup = {}; data.settings.fields.forEach(f => (byGroup[f.group] = byGroup[f.group] || []).push(f));
+
+        let ws;
+        let myClientId = null;  // assigned from the schema message; used to ignore our own echoes
+        const controls = {};   // key -> { num, rng }
+
+        function send(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
+        const sendField = debounce((key, value) => send({ type: 'set', key, value }), 120);
+        function act(action) { send({ type: 'action', action }); }
+        function forget() { if (confirm('Erase WiFi credentials and reboot into BLE provisioning?')) act('forget'); }
+
+        function buildSchema(data) {
+            document.getElementById('geo').textContent =
+                `panel ${data.geometry.width}×${data.geometry.height} · ${data.geometry.bitDepth}-bit · tile ${data.geometry.tile} (compile-time)`;
+            const byGroup = {}; data.fields.forEach(f => (byGroup[f.group] = byGroup[f.group] || []).push(f));
             const root = document.getElementById('groups'); root.innerHTML = '';
+            for (const k in controls) delete controls[k];
             for (const g in byGroup) {
                 const fs = el('fieldset', {}, el('legend', {}, g));
                 byGroup[g].forEach(f => {
@@ -156,6 +167,7 @@
                     const rng = el('input', { type: 'range', min: f.min, max: f.max, step: f.step, value: f.live });
                     const apply = v => { v = Math.max(f.min, Math.min(f.max, +v)); num.value = v; rng.value = v; sendField(f.key, v); };
                     rng.oninput = () => apply(rng.value); num.oninput = () => apply(num.value);
+                    controls[f.key] = { num, rng };
                     const knob = el('div', { class: 'knob' }, el('div', { class: 'row' }, el('label', {}, f.label), rng, num));
                     if (f.desc) knob.append(el('div', { class: 'desc' }, f.desc));
                     fs.append(knob);
@@ -163,12 +175,24 @@
                 root.append(fs);
             }
         }
-        async function load() { try { build(await (await fetch('/api/settings')).json()); } catch (e) { } }
-        async function post(u) { try { build(await (await fetch(u, { method: 'POST' })).json()); } catch (e) { } }
-        async function act(d) { try { await fetch('/api/action', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'do=' + d }); } catch (e) { } }
-        async function forget() { if (confirm('Erase WiFi credentials and reboot into BLE provisioning?')) { try { await fetch('/api/forget-wifi', { method: 'POST' }); } catch (e) { } } }
-        async function stats() { try { const s = await (await fetch('/api/stats')).json(); document.getElementById('stats').textContent = `${s.renderFps} fps · ${s.lifeUps} ups · ${s.live} live · gen ${s.generation}`; } catch (e) { } }
-        load(); setInterval(stats, 1000);
+
+        function applyRemoteSet(key, value) { const c = controls[key]; if (c) { c.num.value = value; c.rng.value = value; } }
+        function showStats(s) { document.getElementById('stats').textContent = `${s.renderFps} fps · ${s.lifeUps} ups · ${s.live} live · gen ${s.generation}`; }
+
+        function onMessage(ev) {
+            let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+            if (m.type === 'schema') { if (m.clientId !== undefined) myClientId = m.clientId; buildSchema(m); }
+            else if (m.type === 'stats') showStats(m);
+            else if (m.type === 'set') { if (m.from !== myClientId) applyRemoteSet(m.key, m.value); }
+        }
+
+        function connect() {
+            ws = new WebSocket(`ws://${location.host}/ws`);
+            ws.onmessage = onMessage;
+            ws.onclose = () => setTimeout(connect, 1000);   // auto-reconnect
+            ws.onerror = () => { try { ws.close(); } catch (e) { } };
+        }
+        connect();
     </script>
 </body>
 
