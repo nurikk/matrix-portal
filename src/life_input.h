@@ -1,5 +1,5 @@
 #pragma once
-// life_input.h — accelerometer read, tilt/knock/shake detection, motion decay.
+// life_input.h — accelerometer read, knock detection, knock/burn glow decay.
 // Included once by main.cpp after life_burn.h. Not a standalone TU.
 
 bool i2cResponds(uint8_t address) {
@@ -48,20 +48,6 @@ void recordKnockOrigin(uint8_t click, int16_t impulseX, int16_t impulseY) {
   pendingBurnCenterY = clamp16(y, 0, panelHeight - 1);
 }
 
-void updateTiltState() {
-  uint16_t planar = abs16(accelX) + abs16(accelY);
-  tiltStrength = planar > 8160 ? 255 : planar >> 5;
-  tiltDx = accelX > gLive.tiltDeadzone ? 1 : (accelX < -gLive.tiltDeadzone ? -1 : 0);
-  tiltDy = accelY > gLive.tiltDeadzone ? 1 : (accelY < -gLive.tiltDeadzone ? -1 : 0);
-  tiltHueBias = clamp16((accelX + accelY) >> 8, -48, 48);
-
-  if (planar > gLive.strongTilt) {
-    raiseMotionGlow(55 + (tiltStrength >> 2));
-  } else if (planar > gLive.tiltDeadzone * 2) {
-    raiseMotionGlow(28 + (tiltStrength >> 3));
-  }
-}
-
 void initAccelerometer() {
   Wire.begin();
 
@@ -84,14 +70,9 @@ void initAccelerometer() {
   accelerometer.setClick(1, 45, 10, 20, 80);
   accelerometer.read();
 
-  accelX = accelerometer.x;
-  accelY = accelerometer.y;
-  accelZ = accelerometer.z;
-  lastAccelX = accelX;
-  lastAccelY = accelY;
-  lastAccelZ = accelZ;
+  lastAccelX = accelerometer.x;
+  lastAccelY = accelerometer.y;
   accelerometerPrimed = true;
-  updateTiltState();
 
   Serial.print("LIS3DH @ 0x");
   Serial.println(address, HEX);
@@ -111,30 +92,11 @@ void pollAccelerometer() {
   accelerometer.read();
   int16_t rawX = accelerometer.x;
   int16_t rawY = accelerometer.y;
-  int16_t rawZ = accelerometer.z;
   int16_t knockImpulseX = accelerometerPrimed ? rawX - lastAccelX : 0;
   int16_t knockImpulseY = accelerometerPrimed ? rawY - lastAccelY : 0;
-
-  if (!accelerometerPrimed) {
-    accelX = rawX;
-    accelY = rawY;
-    accelZ = rawZ;
-    lastAccelX = rawX;
-    lastAccelY = rawY;
-    lastAccelZ = rawZ;
-    accelerometerPrimed = true;
-  } else {
-    accelX += (rawX - accelX) / 4;
-    accelY += (rawY - accelY) / 4;
-    accelZ += (rawZ - accelZ) / 4;
-  }
-
-  uint32_t delta = static_cast<uint32_t>(absDiff16(rawX, lastAccelX)) +
-                   absDiff16(rawY, lastAccelY) + absDiff16(rawZ, lastAccelZ);
   lastAccelX = rawX;
   lastAccelY = rawY;
-  lastAccelZ = rawZ;
-  updateTiltState();
+  accelerometerPrimed = true;
 
   uint8_t click = accelerometer.getClick();
   if ((click & kClickEventMask) && now - lastKnockAt > 120) {
@@ -144,15 +106,6 @@ void pollAccelerometer() {
     knockEventsThisPeriod += knocks;
     lastKnockAt = now;
     raiseMotionGlow(knocks == 2 ? 190 : 145);
-  }
-
-  if (delta > gLive.shakeDelta && now - lastShakeAt > 300) {
-    if (pendingShakes < 4) {
-      pendingShakes++;
-    }
-    shakeEventsThisPeriod++;
-    lastShakeAt = now;
-    raiseMotionGlow(220);
   }
 }
 

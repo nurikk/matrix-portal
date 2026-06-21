@@ -107,7 +107,6 @@ void clearBoard() {
   }
   burnWaveActive = false;
   pendingKnocks = 0;
-  pendingShakes = 0;
   liveCells = 0;
   changedCells = 0;
   generation = 0;
@@ -155,22 +154,14 @@ uint8_t localChunkMass(uint8_t x, uint8_t y) {
   return mass;
 }
 
-uint8_t chunkBirthCadence(uint8_t mass) {
-  if (mass >= gLive.hugeChunkMass) {
-    return 4;
-  }
-  if (mass >= gLive.largeChunkMass) {
-    return 3;
-  }
-  if (mass >= gLive.mediumChunkMass) {
-    return 2;
-  }
-  return 1;
-}
-
 bool denseBirthAllowed(uint8_t x, uint8_t y) {
-  uint8_t cadence = chunkBirthCadence(localChunkMass(x, y));
-  return cadence == 1 || (generation + x * 3 + y * 5) % cadence == 0;
+  // Classic mode is unmodified Conway: never throttle, and skip the 5x5 mass
+  // scan for every legal birth. The same bypass lives in throttledBirthAllowed
+  // (pure, host-tested in life_settings.h), which owns the cadence policy.
+  if (gLive.disableReseed) {
+    return true;
+  }
+  return throttledBirthAllowed(gLive, generation, x, y, localChunkMass(x, y));
 }
 
 void commitNextGeneration() {
@@ -314,7 +305,6 @@ void stepLife() {
   if (!gLive.disableReseed) {
     applyRandomEvents(nextChangedCells < 6 || nextLiveCells < gLive.minLiveCells);
   }
-  applyInteractionEvents();
   recountNextStats(nextLiveCells, nextChangedCells);
 
   if (!gLive.disableReseed && nextLiveCells < gLive.minLiveCells) {

@@ -47,7 +47,7 @@ volatile bool gShowIpScroll = false;
 char gIpText[32] = {0};
 
 namespace {
-constexpr uint16_t kSettingsVersion = 2;   // bumped: added noFade/disableReseed (struct layout changed)
+constexpr uint16_t kSettingsVersion = 3;   // bumped: removed tilt/shake knobs (struct layout changed)
 constexpr const char *kNvsNamespace = "matrixlife";
 constexpr const char *kKeyVersion = "ver";
 constexpr const char *kKeyBlob = "settings";

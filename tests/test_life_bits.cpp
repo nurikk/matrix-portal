@@ -187,11 +187,46 @@ static void testGliderTranslates() {
   }
 }
 
+// The pulsar is the classic period-3 oscillator: it must cycle through two
+// distinct phases and return to its exact start after 3 generations. This guards
+// the *core* engine; the sim's density throttling (which used to break the pulsar)
+// is gated by classic mode and tested in tests/test_life_settings.cpp.
+static void testPulsarPeriod3() {
+  const int W = 32, H = 32;
+  RowBits mask = activeMaskFor(W);
+  const char *cells[13] = {
+      "..OOO...OOO..", ".............", "O....O.O....O", "O....O.O....O",
+      "O....O.O....O", "..OOO...OOO..", ".............", "..OOO...OOO..",
+      "O....O.O....O", "O....O.O....O", "O....O.O....O", ".............",
+      "..OOO...OOO..",
+  };
+  std::vector<RowBits> start = makeBoard(H);
+  for (int y = 0; y < 13; y++)
+    for (int x = 0; x < 13; x++)
+      if (cells[y][x] == 'O') setCell(start, 9 + x, 9 + y);
+
+  std::vector<RowBits> gen1(H), gen2(H), gen3(H);
+  computeConwayNext(start.data(), gen1.data(), W, H, mask);
+  computeConwayNext(gen1.data(), gen2.data(), W, H, mask);
+  computeConwayNext(gen2.data(), gen3.data(), W, H, mask);
+
+  bool diff1 = false, diff2 = false, returned = true;
+  for (int y = 0; y < H; y++) {
+    if (!rowsEqual(gen1[y], start[y], mask)) diff1 = true;
+    if (!rowsEqual(gen2[y], start[y], mask)) diff2 = true;
+    if (!rowsEqual(gen3[y], start[y], mask)) returned = false;
+  }
+  CHECK(diff1, "pulsar phase 1 should differ from start");
+  CHECK(diff2, "pulsar phase 2 should differ from start");
+  CHECK(returned, "pulsar did not return to start after 3 generations");
+}
+
 int main() {
   testRandomEquivalence();
   testBlinkerOscillates();
   testBlockIsStable();
   testGliderTranslates();
+  testPulsarPeriod3();
 
   if (g_failures == 0) {
     std::printf("All life_bits tests passed.\n");

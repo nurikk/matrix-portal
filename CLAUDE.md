@@ -121,11 +121,11 @@ that one TU (see the single-TU note above). The Life headers, in include/depende
   from `kMaxWidth` to a tight `panelWidth*panelHeight`, for the core-0 web board stream.
 - **`life_burn.h`** — the burn-wave state machine
   (`startBurnWave`/`stepBurnWave`/`finishBurnWave`, `clearBurnHeat`).
-- **`life_input.h`** — `pollAccelerometer`, `updateTiltState`, knock/shake detection
-  (`recordKnockOrigin`), `initAccelerometer`, `decayMotionEffects`.
-- **`life_spawn.h`** — pattern spawning (`addGlider`/`addBurst`/`addVoid`/`addMotionBurst`),
-  tilt mapping, and event application (`applyInteractionEvents` / `applyRandomEvents`) onto
-  the `next*` buffers.
+- **`life_input.h`** — `pollAccelerometer`, knock detection (`recordKnockOrigin`),
+  `initAccelerometer`, `decayMotionEffects` (knock/burn glow fade). Knock is the only
+  accelerometer-driven event; tilt/shake were removed.
+- **`life_spawn.h`** — pattern spawning (`addGlider`/`addBurst`/`addVoid`) and random
+  event application (`applyRandomEvents`) onto the `next*` buffers.
 - **`life_sim.h`** — `configureLifeBounds`, `seedLife`, density throttling,
   `commitNextGeneration` (`next*` → `cell*` + ages), and `stepLife` (uses the bit-parallel
   `conwayNextRow` from `life_bits.h` for the per-row birth/survival mask, then fills

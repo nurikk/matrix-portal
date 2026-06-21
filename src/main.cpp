@@ -110,10 +110,8 @@ void setup() {
   framesThisPeriod = 0;
   lifeStepsThisPeriod = 0;
   randomEventsThisPeriod = 0;
-  interactionEventsThisPeriod = 0;
   knockEventsThisPeriod = 0;
   burnEventsThisPeriod = 0;
-  shakeEventsThisPeriod = 0;
   matrix.getFrameCount();
 
   Serial.print("Game of Life: ");

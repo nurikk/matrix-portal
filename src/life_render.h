@@ -17,7 +17,7 @@ Hsv targetColorFor(uint16_t index, uint8_t x, uint8_t y, bool alive) {
 
   uint8_t wave = triWave6(generation * 2 + x * 3 + y * 5 + cellType[index] * 11);
   uint8_t shimmer = triWave6(generation + x * 4 + y * 2);
-  uint8_t hue = wrapHue(cellHue[index] + tiltHueBias +
+  uint8_t hue = wrapHue(cellHue[index] +
                         static_cast<int16_t>(shimmer / 2) - 8);
   uint8_t saturation = cellSat[index];
   uint8_t value = 150 + wave * 3;

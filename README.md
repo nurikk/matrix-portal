@@ -18,10 +18,8 @@ to the board's onboard accelerometer.
 - **Dirty-pixel updates** — only pixels whose color actually changed are pushed to the
   panel.
 - **Accelerometer interaction** (onboard LIS3DH):
-  - **Tilt** steers where new life spawns and biases the palette.
-  - **Shake** scatters gliders and bursts.
   - **Knock / double-tap** triggers a radial **burn wave** that scorches the board and
-    reseeds it.
+    reseeds it. (This is the only gyro-driven event.)
 - **Self-stabilizing** — injects gliders, bursts, and voids when the board stagnates or
   the live-cell count drops too low, then reseeds entirely if it dies out.
 - **Built-in benchmark mode** — a separate firmware path (`MATRIX_BENCHMARK`) that draws a

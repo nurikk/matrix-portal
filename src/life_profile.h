@@ -54,16 +54,10 @@ void reportFps() {
   Serial.print(updatedPixels);
   Serial.print(" | events: ");
   Serial.print(randomEventsThisPeriod);
-  Serial.print(" | motion: ");
-  Serial.print(interactionEventsThisPeriod);
   Serial.print(" | knocks: ");
   Serial.print(knockEventsThisPeriod);
   Serial.print(" | burns: ");
   Serial.print(burnEventsThisPeriod);
-  Serial.print(" | shakes: ");
-  Serial.print(shakeEventsThisPeriod);
-  Serial.print(" | tilt: ");
-  Serial.print(tiltStrength);
   Serial.print(" | gen: ");
   Serial.print(generation);
   Serial.print(" | avg us loop/life/render/show/accel: ");
@@ -93,9 +87,7 @@ void reportFps() {
   framesThisPeriod = 0;
   lifeStepsThisPeriod = 0;
   randomEventsThisPeriod = 0;
-  interactionEventsThisPeriod = 0;
   knockEventsThisPeriod = 0;
   burnEventsThisPeriod = 0;
-  shakeEventsThisPeriod = 0;
   resetProfileCounters();
 }

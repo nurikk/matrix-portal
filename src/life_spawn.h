@@ -3,17 +3,6 @@
 // event application onto the next-generation buffers.
 // Included once by main.cpp after life_input.h. Not a standalone TU.
 
-uint8_t motionType() {
-  return ((static_cast<uint16_t>(wrapHue(motionGlow + tiltStrength + 19)) *
-           kTypeCount) >>
-          8) %
-         kTypeCount;
-}
-
-uint8_t motionHue(uint8_t type) {
-  return wrapHue(speciesHues[type % kTypeCount] + tiltHueBias * 3 + motionGlow);
-}
-
 uint8_t dominantType(uint8_t counts[kTypeCount], uint8_t fallback) {
   uint8_t bestType = fallback % kTypeCount;
   uint8_t bestCount = counts[bestType];
@@ -115,65 +104,6 @@ void addVoid(int16_t cx, int16_t cy, uint8_t radius) {
         setNextDead(cx + x, cy + y);
       }
     }
-  }
-}
-
-int16_t tiltMappedX() {
-  int16_t mapped = panelWidth / 2 +
-                   (static_cast<int32_t>(accelX) * panelWidth) / 18000;
-  return clamp16(mapped, 0, panelWidth - 1);
-}
-
-int16_t tiltMappedY() {
-  int16_t mapped = panelHeight / 2 +
-                   (static_cast<int32_t>(accelY) * panelHeight) / 18000;
-  return clamp16(mapped, 0, panelHeight - 1);
-}
-
-uint8_t tiltRotation() {
-  if (abs16(accelX) > abs16(accelY)) {
-    return accelX >= 0 ? 1 : 3;
-  }
-  return accelY >= 0 ? 2 : 0;
-}
-
-void addMotionBurst(int16_t cx, int16_t cy, uint8_t type, uint8_t hue,
-                    uint8_t radius) {
-  for (int8_t y = -radius; y <= radius; y++) {
-    for (int8_t x = -radius; x <= radius; x++) {
-      uint8_t distance = abs(x) + abs(y);
-      if (distance <= radius && (distance <= 1 || (random32() & 1))) {
-        setNextAliveHsv(cx + x, cy + y, type + distance,
-                        wrapHue(hue + x * 8 + y * 5), 235);
-      }
-    }
-  }
-}
-
-void applyInteractionEvents() {
-  if (!accelerometerReady) {
-    return;
-  }
-
-  uint8_t type = motionType();
-  uint8_t hue = motionHue(type);
-  int16_t cx = tiltMappedX();
-  int16_t cy = tiltMappedY();
-
-  while (pendingShakes) {
-    addVoid(panelWidth / 2, panelHeight / 2, 3);
-    addMotionBurst(panelWidth / 2, panelHeight / 2, type, wrapHue(hue + 128), 5);
-    for (uint8_t i = 0; i < 4; i++) {
-      addGlider(random32() % panelWidth, random32() % panelHeight, type + i,
-                random32());
-    }
-    pendingShakes--;
-    interactionEventsThisPeriod += 5;
-  }
-
-  if (tiltStrength > 135 && (generation & 15) == 0) {
-    addMotionBurst(cx, cy, type, hue, 2);
-    interactionEventsThisPeriod++;
   }
 }
 

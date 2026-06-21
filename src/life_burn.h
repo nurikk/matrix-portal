@@ -17,7 +17,6 @@ void startBurnWave() {
 
   burnWaveActive = true;
   burnRadius = 0;
-  pendingShakes = 0;
   burnCenterX = pendingBurnCenterX;
   burnCenterY = pendingBurnCenterY;
   int16_t centerX = burnCenterX;
@@ -57,7 +56,6 @@ void finishBurnWave() {
 
 void stepBurnWave() {
   pendingKnocks = 0;
-  pendingShakes = 0;
   uint16_t nextLiveCells = 0;
   uint16_t burnedCells = 0;
   bool hasHeat = false;

@@ -18,7 +18,6 @@ int main() {
   CHECK(d.renderFrameMs == 33, "default renderFrameMs");
   CHECK(d.minLiveCells == 8, "default minLiveCells");
   CHECK(d.hueStep == 3, "default hueStep");
-  CHECK(d.shakeDelta == 10000, "default shakeDelta");
   CHECK(d.knockImpulseFullScale == 18000, "default knockImpulseFullScale");
 
   // Defaults are already in-range: clamping is a no-op.
@@ -55,6 +54,44 @@ int main() {
   long byKey = -1;
   CHECK(getLifeSettingByKey(d, "hueStep", &byKey) && byKey == 3, "by-key hueStep default");
   CHECK(!getLifeSettingByKey(d, "nope", &byKey), "by-key unknown rejected");
+
+  // --- density-throttling birth policy ---
+  // Cadence thresholds (defaults: medium=7, large=12, huge=18).
+  CHECK(chunkBirthCadence(d, 0) == 1, "cadence: empty cluster -> 1");
+  CHECK(chunkBirthCadence(d, 6) == 1, "cadence: below medium -> 1");
+  CHECK(chunkBirthCadence(d, 7) == 2, "cadence: medium -> 2");
+  CHECK(chunkBirthCadence(d, 11) == 2, "cadence: below large -> 2");
+  CHECK(chunkBirthCadence(d, 12) == 3, "cadence: large -> 3");
+  CHECK(chunkBirthCadence(d, 18) == 4, "cadence: huge -> 4");
+  CHECK(chunkBirthCadence(d, 25) == 4, "cadence: max mass -> 4");
+
+  // Organic mode (default): a dense cluster (mass 10 -> cadence 2) must suppress
+  // some births and allow others across positions/generations.
+  {
+    bool anyAllowed = false, anySuppressed = false;
+    for (uint32_t g = 0; g < 4; g++)
+      for (uint8_t x = 0; x < 8; x++)
+        for (uint8_t y = 0; y < 8; y++) {
+          if (throttledBirthAllowed(d, g, x, y, 10)) anyAllowed = true;
+          else anySuppressed = true;
+        }
+    CHECK(anySuppressed, "organic mode throttles some dense births");
+    CHECK(anyAllowed, "organic mode still allows some dense births");
+  }
+
+  // Classic mode (disableReseed): a legal birth is NEVER throttled, for ANY
+  // local mass, position, or generation. This is the pulsar fix.
+  {
+    LifeSettings classic = d;
+    classic.disableReseed = 1;
+    bool allAllowed = true;
+    for (uint32_t g = 0; g < 4 && allAllowed; g++)
+      for (uint8_t x = 0; x < 16 && allAllowed; x++)
+        for (uint8_t y = 0; y < 16 && allAllowed; y++)
+          for (int mass = 0; mass <= 25; mass++)
+            if (!throttledBirthAllowed(classic, g, x, y, (uint8_t)mass)) { allAllowed = false; break; }
+    CHECK(allAllowed, "classic mode never throttles a legal birth (pulsar fix)");
+  }
 
   if (g_failures == 0) std::printf("ALL SETTINGS TESTS PASSED\n");
   return g_failures ? 1 : 0;
