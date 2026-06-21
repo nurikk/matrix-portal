@@ -75,6 +75,7 @@ Adafruit_LIS3DH accelerometer = Adafruit_LIS3DH();
 #include "life_profile.h"
 #include "life_color.h"
 #include "life_render.h"
+#include "life_burn.h"
 
 uint8_t motionType() {
   return ((static_cast<uint16_t>(wrapHue(motionGlow + tiltStrength + 19)) *
@@ -118,12 +119,6 @@ void configureLifeBounds() {
 int16_t tiltMappedX();
 int16_t tiltMappedY();
 
-void clearBurnHeat() {
-  for (uint16_t index = 0; index < kCellCount; index++) {
-    burnHeat[index] = 0;
-  }
-}
-
 void recordKnockOrigin(uint8_t click, int16_t impulseX, int16_t impulseY) {
   int16_t clickSign = (click & kClickSignNegative) ? -1 : 1;
 
@@ -163,111 +158,6 @@ void recordKnockOrigin(uint8_t click, int16_t impulseX, int16_t impulseY) {
                   gLive.knockImpulseFullScale;
   pendingBurnCenterX = clamp16(x, 0, panelWidth - 1);
   pendingBurnCenterY = clamp16(y, 0, panelHeight - 1);
-}
-
-void startBurnWave() {
-  pendingKnocks = 0;
-  if (burnWaveActive) {
-    return;
-  }
-
-  burnWaveActive = true;
-  burnRadius = 0;
-  pendingShakes = 0;
-  burnCenterX = pendingBurnCenterX;
-  burnCenterY = pendingBurnCenterY;
-  int16_t centerX = burnCenterX;
-  int16_t centerY = burnCenterY;
-  uint16_t farthestSquared = 0;
-
-  for (uint8_t yCorner = 0; yCorner < 2; yCorner++) {
-    int16_t y = yCorner ? panelHeight - 1 : 0;
-    for (uint8_t xCorner = 0; xCorner < 2; xCorner++) {
-      int16_t x = xCorner ? panelWidth - 1 : 0;
-      int16_t dx = x - centerX;
-      int16_t dy = y - centerY;
-      uint16_t distanceSquared = static_cast<uint16_t>(dx * dx + dy * dy);
-      if (distanceSquared > farthestSquared) {
-        farthestSquared = distanceSquared;
-      }
-    }
-  }
-
-  burnEndRadius = 0;
-  while (static_cast<uint16_t>(burnEndRadius) * burnEndRadius < farthestSquared &&
-         burnEndRadius < 240) {
-    burnEndRadius++;
-  }
-  burnEndRadius += gLive.burnRingWidth + 8;
-  clearBurnHeat();
-  burnEventsThisPeriod++;
-  raiseMotionGlow(255);
-}
-
-void finishBurnWave() {
-  burnWaveActive = false;
-  burnRadius = 0;
-  clearBurnHeat();
-  seedLife();
-}
-
-void stepBurnWave() {
-  pendingKnocks = 0;
-  pendingShakes = 0;
-  uint16_t nextLiveCells = 0;
-  uint16_t burnedCells = 0;
-  bool hasHeat = false;
-  int16_t centerX = burnCenterX;
-  int16_t centerY = burnCenterY;
-  uint8_t innerRadius = burnRadius > gLive.burnRingWidth ? burnRadius - gLive.burnRingWidth : 0;
-  uint8_t outerRadius = burnRadius + gLive.burnRingWidth;
-  uint16_t killRadiusSquared = static_cast<uint16_t>(burnRadius) * burnRadius;
-  uint16_t innerSquared = static_cast<uint16_t>(innerRadius) * innerRadius;
-  uint16_t outerSquared = static_cast<uint16_t>(outerRadius) * outerRadius;
-
-  for (uint8_t y = 0; y < panelHeight; y++) {
-    RowBits row = currentRows[y] & activeMask;
-    uint16_t baseIndex = y * kMaxWidth;
-
-    for (uint8_t x = 0; x < panelWidth; x++) {
-      uint16_t index = baseIndex + x;
-      uint8_t heat = burnHeat[index];
-      if (heat > gLive.burnFadeStep) {
-        heat -= gLive.burnFadeStep;
-      } else {
-        heat = 0;
-      }
-
-      int16_t dx = x - centerX;
-      int16_t dy = y - centerY;
-      uint16_t distanceSquared = static_cast<uint16_t>(dx * dx + dy * dy);
-      if (distanceSquared >= innerSquared && distanceSquared <= outerSquared) {
-        heat = 255;
-      }
-
-      if (distanceSquared <= killRadiusSquared && (row & bitForX[x])) {
-        row &= ~bitForX[x];
-        burnedCells++;
-      }
-
-      burnHeat[index] = heat;
-      hasHeat = hasHeat || heat;
-    }
-
-    currentRows[y] = row;
-    nextLiveCells += popcount64(row);
-  }
-
-  liveCells = nextLiveCells;
-  changedCells = burnedCells;
-  generation++;
-
-  if (burnRadius < 250) {
-    burnRadius++;
-  }
-  if (burnRadius > burnEndRadius && !hasHeat) {
-    finishBurnWave();
-  }
 }
 
 void seedLife() {
