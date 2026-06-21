@@ -17,6 +17,8 @@ extern LifeSettings gDefaults;
 extern volatile bool gReqReseed;
 extern volatile bool gReqBurn;
 extern volatile bool gReqForget;
+extern volatile int8_t gReqPause;
+extern volatile bool gReqClear;
 extern volatile uint16_t gStatRenderFps;
 extern volatile uint16_t gStatLifeUps;
 extern uint16_t liveCells;
@@ -31,6 +33,11 @@ extern int gGeoTile;
 // documented benign cross-core race (see the comment on the definition).
 void copyDrawnFrame(uint16_t *dst);
 
+// Defined in life_sim.h (core 1). Injects browser-drawn cells from a tight row-major
+// bitmask into the current generation. Called ONLY from webPortalTick() on core 1 (which
+// owns the cell arrays); core 0 merely stages the bitmask and sets gReqDraw.
+void applyDrawnCells(const uint8_t *mask, uint8_t w, uint8_t h);
+
 #include "web_ui.h"
 
 void webServerStart();  // defined below; called from onWiFiEvent
@@ -40,7 +47,7 @@ volatile bool gShowIpScroll = false;
 char gIpText[32] = {0};
 
 namespace {
-constexpr uint16_t kSettingsVersion = 1;
+constexpr uint16_t kSettingsVersion = 2;   // bumped: added noFade/disableReseed (struct layout changed)
 constexpr const char *kNvsNamespace = "matrixlife";
 constexpr const char *kKeyVersion = "ver";
 constexpr const char *kKeyBlob = "settings";
@@ -138,6 +145,24 @@ constexpr uint32_t kFramePushMs = 100;     // ~10 fps board mirror — smooth, L
 constexpr uint8_t kFrameMagic = 0x4C;      // 'L'
 constexpr uint8_t kFrameVersion = 1;
 constexpr size_t kFrameHeaderBytes = 6;
+
+// --- Browser-drawn cells (binary frames, browser → firmware) ---
+// Same 6-byte header layout as the download frame, but magic 'D'. The payload is a tight
+// row-major bitmask packed by width (bitIndex = y*width + x, LSB-first); a set bit paints
+// cell (x,y) alive. The buffer is sized for the firmware's documented max panel (128×128,
+// enforced by the #error guard in life_state.h), so it is geometry-independent.
+constexpr uint8_t kDrawFrameMagic = 0x44;   // 'D'
+constexpr uint8_t kDrawFrameVersion = 1;
+constexpr size_t kDrawMaskBytes = (128u * 128u + 7u) / 8u;   // 2048; covers any supported panel
+constexpr size_t kMaxWsDrawBytes = kFrameHeaderBytes + kDrawMaskBytes;
+
+// Single-producer (core 0 WS callback) / single-consumer (core 1 webPortalTick) hand-off
+// for a browser-drawn frame. The critical sections guard only gReqDraw — they are the
+// memory barrier. Core 0 fills gDrawBitmask only while !gReqDraw, and core 1 clears
+// gReqDraw only AFTER it finishes reading, so the buffer is never written and read at once.
+portMUX_TYPE gDrawMux = portMUX_INITIALIZER_UNLOCKED;
+uint8_t gDrawBitmask[kDrawMaskBytes];
+volatile bool gReqDraw = false;
 
 // Build the full settings schema. "live" = gPending (the desired copy, mutex-guarded) —
 // matches the old sendSettingsJson and avoids reading core-1-owned gLive from core 0.
@@ -240,6 +265,9 @@ bool dispatchWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t
     const char *action = doc["action"] | "";
     if (strcmp(action, "reseed") == 0) { gReqReseed = true; return true; }
     if (strcmp(action, "burn") == 0)   { gReqBurn = true;   return true; }
+    if (strcmp(action, "stop") == 0)   { gReqPause = 1;     return true; }
+    if (strcmp(action, "resume") == 0) { gReqPause = -1;    return true; }
+    if (strcmp(action, "clear") == 0)  { gReqClear = true;  return true; }
     if (strcmp(action, "forget") == 0) { gReqForget = true; return true; }
     if (strcmp(action, "save") == 0) {
       LifeSettings cur;
@@ -254,6 +282,29 @@ bool dispatchWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t
     if (strcmp(action, "reset") == 0)  { publishPending(gDefaults); broadcastSchema(); return true; }
   }
   return false;
+}
+
+// Validate one complete binary draw frame and stage its bitmask for core 1. Runs in the
+// AsyncTCP task (core 0). Returns true if the frame was understood (even if dropped due to
+// backpressure). Never touches the cell arrays — that is webPortalTick()'s job on core 1.
+bool dispatchDrawFrame(const uint8_t *data, size_t len) {
+  if (len < kFrameHeaderBytes) return false;
+  if (data[0] != kDrawFrameMagic || data[1] != kDrawFrameVersion) return false;
+  uint16_t w = (uint16_t)data[2] | ((uint16_t)data[3] << 8);
+  uint16_t h = (uint16_t)data[4] | ((uint16_t)data[5] << 8);
+  if (w != panelWidth || h != panelHeight) return false;   // geometry must match exactly
+  size_t maskBytes = ((size_t)w * h + 7) / 8;
+  if (maskBytes > kDrawMaskBytes) return false;
+  if (len != kFrameHeaderBytes + maskBytes) return false;
+
+  // SPSC hand-off: fill the buffer only while core 1 has drained the previous draw, then
+  // publish via the barrier. The critical sections guard only the flag.
+  bool pending;
+  taskENTER_CRITICAL(&gDrawMux); pending = gReqDraw; taskEXIT_CRITICAL(&gDrawMux);
+  if (pending) return true;                       // core 1 hasn't drained the last draw — drop this one
+  memcpy(gDrawBitmask, data + kFrameHeaderBytes, maskBytes);   // fill buffer BEFORE publishing
+  taskENTER_CRITICAL(&gDrawMux); gReqDraw = true; taskEXIT_CRITICAL(&gDrawMux);   // publish (barrier)
+  return true;
 }
 
 void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
@@ -271,10 +322,14 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
     }
     case WS_EVT_DATA: {
       AwsFrameInfo *info = (AwsFrameInfo *)arg;
-      // Complete single-frame text only; reject oversized frames before deserializing.
-      if (info->final && info->index == 0 && info->len == len &&
-          info->opcode == WS_TEXT && len <= kMaxWsFrameBytes) {
-        dispatchWsMessage(client, data, len);
+      // Complete single frames only. Text → JSON control (≤256 B cap); binary → drawn cells
+      // (≤max-panel cap). Reject oversized/fragmented frames before parsing.
+      if (info->final && info->index == 0 && info->len == len) {
+        if (info->opcode == WS_TEXT && len <= kMaxWsFrameBytes) {
+          dispatchWsMessage(client, data, len);
+        } else if (info->opcode == WS_BINARY && len <= kMaxWsDrawBytes) {
+          dispatchDrawFrame(data, len);
+        }
       }
       break;
     }
@@ -362,6 +417,15 @@ void webPortalTick() {
     gPendingDirty = false;
     taskEXIT_CRITICAL(&gSettingsMux);
     gLive = next;          // the ONLY writer of gLive (core 1)
+  }
+
+  // Drain a staged browser-drawn frame: apply FIRST (read the buffer), then release it by
+  // clearing the flag — so core 0 only refills gDrawBitmask once we are done reading.
+  bool doDraw;
+  taskENTER_CRITICAL(&gDrawMux); doDraw = gReqDraw; taskEXIT_CRITICAL(&gDrawMux);
+  if (doDraw) {
+    applyDrawnCells(gDrawBitmask, panelWidth, panelHeight);   // read buffer (core 1 owns cell arrays)
+    taskENTER_CRITICAL(&gDrawMux); gReqDraw = false; taskEXIT_CRITICAL(&gDrawMux);   // release buffer
   }
 }
 

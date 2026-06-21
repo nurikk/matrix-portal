@@ -80,8 +80,14 @@ so `pio test` won't try to run these on-target.)
   callbacks and a core-0 `wsPushTask` (broadcasts a binary board frame ~every 100 ms and
   stats ~every 500 ms, calls `cleanupClients`) stage incoming edits into `gPending` (under
   `gSettingsMux`); `webPortalTick()` on core 1 promotes them into `gLive` and handles
-  deferred actions (reseed, burn, forget-wifi reboot) — `gLive` is never written from core
-  0. Do not read `gPending` or write `gLive` outside this protocol. `liveCells`/`generation`
+  deferred actions (reseed, burn, clear, pause/resume, forget-wifi reboot) — `gLive` is
+  never written from core
+  0. Browser-drawn cells follow the same protocol: a binary draw frame is staged into
+  `gDrawBitmask` + the `gReqDraw` flag (under `gDrawMux`, a single-producer/single-consumer
+  hand-off — core 0 fills the buffer only while the flag is clear, core 1 clears it only
+  after `applyDrawnCells` has injected the cells into `currentRows`). Do not read
+  `gPending`/`gDrawBitmask` or write `gLive`/the cell arrays outside this protocol.
+  `liveCells`/`generation`
   are intentionally non-volatile (read per-cell in the render hot loop); stats **and** the
   board frame (core 0 reads `drawnColor` via `copyDrawnFrame` while core 1 writes it) are
   accepted benign cross-core races — do not add `volatile`.
@@ -154,8 +160,12 @@ Standalone / unchanged supporting files:
   frames; the live board is streamed on WS **binary** frames (a 6-byte little-endian header
   — magic `'L'`, version, width, height — then `width*height` row-major RGB565 pixels), so
   text and binary never collide on the one socket. The browser expands 565→888 onto a
-  `<canvas>`. The portal walks `kLifeFieldMeta` from `life_settings.h` to build settings
-  JSON. A core-0 `wsPushTask` broadcasts the board (~every 100 ms, via a single ref-counted
+  `<canvas>`. The reverse direction reuses that binary lane: the browser lets you **draw**
+  cells (paint on a transparent overlay `<canvas>` stacked over the board, batched and sent
+  on pointer-up) as a second binary frame type — magic `'D'`, same 6-byte header, then a
+  tight row-major LSB-first bitmask of cells to bring alive — parsed by `dispatchDrawFrame`
+  and injected via `applyDrawnCells` (see the two-core hand-off above). The portal walks
+  `kLifeFieldMeta` from `life_settings.h` to build settings JSON. A core-0 `wsPushTask` broadcasts the board (~every 100 ms, via a single ref-counted
   `makeBuffer`/`binaryAll`) and stats (~every 500 ms) under one `availableForWriteAll()`
   backpressure gate, and calls `cleanupClients`. Incoming WS edits and actions are staged into
   `gPending` (under `gSettingsMux`); `webPortalTick()` (called from the core-1 loop)

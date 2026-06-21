@@ -44,19 +44,36 @@
 
         .board-wrap {
             display: flex;
-            justify-content: center;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
             margin: 0 0 16px
+        }
+
+        .board-box {
+            position: relative;
+            width: 100%;
+            max-width: 480px
         }
 
         #board {
             display: block;
             width: 100%;
-            max-width: 480px;
             height: auto;
             image-rendering: pixelated;
             background: #000;
             border: 1px solid #232838;
             border-radius: 10px
+        }
+
+        #overlay {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated;
+            touch-action: none;
+            cursor: crosshair
         }
 
         /* Wide screens: two columns — config on the left, live canvas on the right.
@@ -122,6 +139,24 @@
             line-height: 1.4
         }
 
+        .check {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #cdd3e1;
+            cursor: pointer
+        }
+
+        .check input {
+            width: auto;
+            cursor: pointer
+        }
+
+        .ctl-check {
+            width: 100%;
+            margin-top: 2px
+        }
+
         input[type=range] {
             width: 100%
         }
@@ -136,14 +171,73 @@
         }
 
         .bar {
-            position: sticky;
-            bottom: 0;
             display: flex;
-            gap: 8px;
+            flex-direction: column;
+            gap: 10px;
+            width: 100%;
+            max-width: 480px
+        }
+
+        .ctl {
+            display: flex;
             flex-wrap: wrap;
-            background: #12151c;
-            padding: 12px 16px;
-            border-top: 1px solid #232838
+            gap: 8px;
+            align-items: center
+        }
+
+        .ctl-label {
+            width: 100%;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            color: #6b7385
+        }
+
+        .palette {
+            width: 100%;
+            max-width: 480px;
+            min-width: 0;
+            margin: 0
+        }
+
+        #patterns {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
+            gap: 8px
+        }
+
+        .pat {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            padding: 6px;
+            border: 1px solid #232838;
+            border-radius: 8px;
+            background: #10131b;
+            cursor: grab;
+            touch-action: none;
+            user-select: none
+        }
+
+        .pat:active {
+            cursor: grabbing;
+            border-color: #2a6df4
+        }
+
+        .pat canvas {
+            width: 60px;
+            height: 60px;
+            image-rendering: pixelated;
+            background: #000;
+            border-radius: 4px
+        }
+
+        .pat span {
+            font-size: 11px;
+            color: #9aa3ba;
+            text-align: center;
+            line-height: 1.15
         }
 
         button {
@@ -176,17 +270,37 @@
         <div class="geo" id="stats"></div>
     </header>
     <main>
-        <div class="board-wrap"><canvas id="board" width="64" height="64"></canvas></div>
+        <div class="board-wrap">
+            <div class="board-box"><canvas id="board" width="64" height="64"></canvas><canvas id="overlay" width="64" height="64"></canvas></div>
+            <div class="bar">
+                <div class="ctl">
+                    <span class="ctl-label">Board</span>
+                    <button onclick="act('stop')">Stop</button>
+                    <button onclick="act('resume')">Resume</button>
+                    <button onclick="act('reseed')">Reseed</button>
+                    <button onclick="act('clear')">Clear all</button>
+                    <button onclick="act('burn')">Burn</button>
+                    <label class="check ctl-check"><input type="checkbox" id="reseedToggle"><span>Disable auto-reseed</span></label>
+                    <label class="check ctl-check"><input type="checkbox" id="fadeToggle"><span>Classic (no fade)</span></label>
+                </div>
+                <div class="ctl">
+                    <span class="ctl-label">Settings</span>
+                    <button class="primary" onclick="act('save')">Save</button>
+                    <button onclick="act('revert')">Revert</button>
+                    <button onclick="act('reset')">Reset</button>
+                </div>
+                <div class="ctl">
+                    <span class="ctl-label">Device</span>
+                    <button class="warn" onclick="forget()">Forget WiFi</button>
+                </div>
+            </div>
+            <fieldset class="palette">
+                <legend>Patterns — drag onto the board</legend>
+                <div id="patterns"></div>
+            </fieldset>
+        </div>
         <div id="groups"></div>
     </main>
-    <div class="bar">
-        <button class="primary" onclick="act('save')">Save</button>
-        <button onclick="act('revert')">Revert to saved</button>
-        <button onclick="act('reset')">Reset to defaults</button>
-        <button onclick="act('reseed')">Reseed</button>
-        <button onclick="act('burn')">Burn</button>
-        <button class="warn" onclick="forget()">Forget WiFi</button>
-    </div>
     <script>
         function el(t, a = {}, ...k) { const e = document.createElement(t); for (const x in a) e.setAttribute(x, a[x]); e.append(...k); return e; }
         function debounce(fn, ms) { let h; return (...a) => { clearTimeout(h); h = setTimeout(() => fn(...a), ms); }; }
@@ -210,20 +324,35 @@
             for (const g in byGroup) {
                 const fs = el('fieldset', {}, el('legend', {}, g));
                 byGroup[g].forEach(f => {
-                    const num = el('input', { type: 'number', min: f.min, max: f.max, step: f.step, value: f.live });
-                    const rng = el('input', { type: 'range', min: f.min, max: f.max, step: f.step, value: f.live });
-                    const apply = v => { v = Math.max(f.min, Math.min(f.max, +v)); num.value = v; rng.value = v; sendField(f.key, v); };
-                    rng.oninput = () => apply(rng.value); num.oninput = () => apply(num.value);
-                    controls[f.key] = { num, rng };
-                    const knob = el('div', { class: 'knob' }, el('div', { class: 'row' }, el('label', {}, f.label), rng, num));
+                    if (f.key === 'disableReseed' || f.key === 'noFade') return;   // shown in the Board control group instead
+                    const knob = el('div', { class: 'knob' });
+                    if (f.min === 0 && f.max === 1 && f.step === 1) {   // boolean field -> checkbox
+                        const cb = el('input', { type: 'checkbox' }); cb.checked = !!f.live;
+                        cb.onchange = () => sendField(f.key, cb.checked ? 1 : 0);
+                        controls[f.key] = { cb };
+                        knob.append(el('label', { class: 'check' }, cb, el('span', {}, f.label)));
+                    } else {
+                        const num = el('input', { type: 'number', min: f.min, max: f.max, step: f.step, value: f.live });
+                        const rng = el('input', { type: 'range', min: f.min, max: f.max, step: f.step, value: f.live });
+                        const apply = v => { v = Math.max(f.min, Math.min(f.max, +v)); num.value = v; rng.value = v; sendField(f.key, v); };
+                        rng.oninput = () => apply(rng.value); num.oninput = () => apply(num.value);
+                        controls[f.key] = { num, rng };
+                        knob.append(el('div', { class: 'row' }, el('label', {}, f.label), rng, num));
+                    }
                     if (f.desc) knob.append(el('div', { class: 'desc' }, f.desc));
                     fs.append(knob);
                 });
                 root.append(fs);
             }
+            // These two toggles live as checkboxes in the Board control group (handy for the
+            // clear-then-watch workflow), not in the settings list. Wire them from the schema here.
+            [['disableReseed', 'reseedToggle'], ['noFade', 'fadeToggle']].forEach(([key, id]) => {
+                const cb = document.getElementById(id), fld = data.fields.find(f => f.key === key);
+                if (cb && fld) { cb.checked = !!fld.live; cb.onchange = () => sendField(key, cb.checked ? 1 : 0); controls[key] = { cb }; }
+            });
         }
 
-        function applyRemoteSet(key, value) { const c = controls[key]; if (c) { c.num.value = value; c.rng.value = value; } }
+        function applyRemoteSet(key, value) { const c = controls[key]; if (!c) return; if (c.cb) c.cb.checked = !!value; else { c.num.value = value; c.rng.value = value; } }
         function showStats(s) { document.getElementById('stats').textContent = `${s.renderFps} fps · ${s.lifeUps} ups · ${s.live} live · gen ${s.generation}`; }
 
         // Binary board frame: 6-byte header (magic 'L', version, width, height; little-endian)
@@ -236,7 +365,7 @@
             const cells = w * h;
             if (buf.byteLength < 6 + cells * 2) return;
             const cv = document.getElementById('board');
-            if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; bimg = null; }
+            if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; bimg = null; syncOverlay(); }
             if (!bctx) bctx = cv.getContext('2d');
             if (!bimg) bimg = bctx.createImageData(w, h);
             // Wire format is little-endian; Uint16Array reads in host byte order, which is
@@ -248,7 +377,130 @@
                 d[j] = (r5 << 3) | (r5 >> 2); d[j + 1] = (g6 << 2) | (g6 >> 4); d[j + 2] = (b5 << 3) | (b5 >> 2); d[j + 3] = 255;
             }
             bctx.putImageData(bimg, 0, 0);
+            if (clearOnNextFrame) { clearOnNextFrame = false; clearOverlay(); }   // echo arrived; drop the preview
         }
+
+        // --- Draw-on-canvas: paint cells on a transparent overlay stacked over #board, then
+        // push the whole stroke to the firmware as one binary frame on pointer up. The overlay's
+        // native size always tracks the board's so cells line up pixel-for-pixel.
+        const overlay = document.getElementById('overlay');
+        const octx = overlay.getContext('2d');
+        let painted = new Set();      // cells painted this stroke, keyed y*w+x (dedupes)
+        let drawing = false, lastX = 0, lastY = 0;
+        let clearOnNextFrame = false; // after a send, keep preview until the next board frame echoes it
+
+        function syncOverlay() { overlay.width = document.getElementById('board').width; overlay.height = document.getElementById('board').height; redrawPreview(); }
+        function clearOverlay() { octx.clearRect(0, 0, overlay.width, overlay.height); }
+        function redrawPreview() { clearOverlay(); octx.fillStyle = 'rgba(255,255,255,0.9)'; painted.forEach(k => octx.fillRect(k % overlay.width, (k / overlay.width) | 0, 1, 1)); }
+
+        function eventCell(e) {   // CSS-upscaled client coords -> native cell coords, clamped
+            const r = overlay.getBoundingClientRect();
+            const x = Math.floor((e.clientX - r.left) / r.width * overlay.width);
+            const y = Math.floor((e.clientY - r.top) / r.height * overlay.height);
+            return [Math.max(0, Math.min(overlay.width - 1, x)), Math.max(0, Math.min(overlay.height - 1, y))];
+        }
+        function paint(x, y) { const k = y * overlay.width + x; if (!painted.has(k)) { painted.add(k); octx.fillRect(x, y, 1, 1); } }
+        function paintLine(x0, y0, x1, y1) {   // Bresenham: fill every cell between two samples
+            const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+            let err = dx + dy;
+            for (; ;) {
+                paint(x0, y0);
+                if (x0 === x1 && y0 === y1) break;
+                const e2 = 2 * err;
+                if (e2 >= dy) { err += dy; x0 += sx; }
+                if (e2 <= dx) { err += dx; y0 += sy; }
+            }
+        }
+
+        // Build + send one 'D' frame from an iterable of bit indices (each = y*w+x). Shared by
+        // freehand drawing and pattern drops. Sends only when non-empty and the socket is open.
+        function sendBits(bits) {   // magic 'D', v1, w/h u16 LE, then row-major LSB-first bitmask
+            const w = overlay.width, h = overlay.height, buf = new ArrayBuffer(6 + Math.ceil(w * h / 8));
+            const dv = new DataView(buf); dv.setUint8(0, 0x44); dv.setUint8(1, 0x01); dv.setUint16(2, w, true); dv.setUint16(4, h, true);
+            const mask = new Uint8Array(buf, 6); let n = 0;
+            for (const b of bits) { mask[b >> 3] |= 1 << (b & 7); n++; }
+            if (n && ws && ws.readyState === WebSocket.OPEN) ws.send(buf);
+            return n;
+        }
+        function sendFrame() { sendBits(painted); }   // freehand stroke — painted holds y*w+x keys
+
+        overlay.onpointerdown = e => { e.preventDefault(); overlay.setPointerCapture(e.pointerId); drawing = true; clearOnNextFrame = false; painted = new Set(); octx.fillStyle = 'rgba(255,255,255,0.9)'; clearOverlay(); [lastX, lastY] = eventCell(e); paint(lastX, lastY); };
+        overlay.onpointermove = e => { if (!drawing) return; e.preventDefault(); const [x, y] = eventCell(e); paintLine(lastX, lastY, x, y); lastX = x; lastY = y; };
+        const endStroke = e => { if (!drawing) return; e.preventDefault(); drawing = false; sendFrame(); clearOnNextFrame = painted.size > 0; };   // keep preview until firmware echoes
+        overlay.onpointerup = endStroke; overlay.onpointercancel = endStroke;
+        syncOverlay();
+
+        // --- Pattern palette: drag a known Life formation onto the board. A pattern is just a set
+        // of relative cells; dropping it sends the same 'D' frame freehand draw uses, centered on
+        // the drop cell and wrapped toroidally (matching the sim). No firmware change — just cells.
+        const PATTERNS = [
+            { name: 'Glider', cells: [[1,0],[2,1],[0,2],[1,2],[2,2]] },
+            { name: 'LWSS', cells: [[1,0],[4,0],[0,1],[0,2],[4,2],[0,3],[1,3],[2,3],[3,3]] },
+            { name: 'Blinker', cells: [[0,0],[1,0],[2,0]] },
+            { name: 'Toad', cells: [[1,0],[2,0],[3,0],[0,1],[1,1],[2,1]] },
+            { name: 'Beacon', cells: [[0,0],[1,0],[0,1],[1,1],[2,2],[3,2],[2,3],[3,3]] },
+            { name: 'Pulsar', cells: [[2,0],[3,0],[4,0],[8,0],[9,0],[10,0],[0,2],[5,2],[7,2],[12,2],[0,3],[5,3],[7,3],[12,3],[0,4],[5,4],[7,4],[12,4],[2,5],[3,5],[4,5],[8,5],[9,5],[10,5],[2,7],[3,7],[4,7],[8,7],[9,7],[10,7],[0,8],[5,8],[7,8],[12,8],[0,9],[5,9],[7,9],[12,9],[0,10],[5,10],[7,10],[12,10],[2,12],[3,12],[4,12],[8,12],[9,12],[10,12]] },
+            { name: 'Pentadecathlon', cells: [[2,0],[7,0],[0,1],[1,1],[3,1],[4,1],[5,1],[6,1],[8,1],[9,1],[2,2],[7,2]] },
+            { name: 'Block', cells: [[0,0],[1,0],[0,1],[1,1]] },
+            { name: 'Beehive', cells: [[1,0],[2,0],[0,1],[3,1],[1,2],[2,2]] },
+            { name: 'Loaf', cells: [[1,0],[2,0],[0,1],[3,1],[1,2],[3,2],[2,3]] },
+            { name: 'Boat', cells: [[0,0],[1,0],[0,1],[2,1],[1,2]] },
+            { name: 'Gosper gun', cells: [[24,0],[22,1],[24,1],[12,2],[13,2],[20,2],[21,2],[34,2],[35,2],[11,3],[15,3],[20,3],[21,3],[34,3],[35,3],[0,4],[1,4],[10,4],[16,4],[20,4],[21,4],[0,5],[1,5],[10,5],[14,5],[16,5],[17,5],[22,5],[24,5],[10,6],[16,6],[24,6],[11,7],[15,7],[12,8],[13,8]] },
+        ];
+        const GHOST = 'rgba(122,215,255,0.85)';
+
+        function patternBox(cells) { let w = 0, h = 0; for (const [x, y] of cells) { if (x + 1 > w) w = x + 1; if (y + 1 > h) h = y + 1; } return [w, h]; }
+        function drawThumb(cv, cells) {   // render a pattern into its thumbnail, integer-scaled + centered
+            const ctx = cv.getContext('2d'), S = cv.width, [w, h] = patternBox(cells);
+            const scale = Math.max(1, Math.floor(Math.min(S / w, S / h)));
+            const ox = ((S - w * scale) / 2) | 0, oy = ((S - h * scale) / 2) | 0;
+            ctx.clearRect(0, 0, S, S); ctx.fillStyle = '#8fd6ff';
+            for (const [x, y] of cells) ctx.fillRect(ox + x * scale, oy + y * scale, scale, scale);
+        }
+        // Center a pattern on board cell (cx,cy), wrapped toroidally into the panel.
+        function patternAt(cells, cx, cy) {
+            const W = overlay.width, H = overlay.height, [w, h] = patternBox(cells);
+            const ox = cx - (w >> 1), oy = cy - (h >> 1);
+            return cells.map(([x, y]) => [((ox + x) % W + W) % W, ((oy + y) % H + H) % H]);
+        }
+        function overBoard(e) { const r = overlay.getBoundingClientRect(); return e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.bottom; }
+
+        let dragPattern = null;
+        function ghostPattern(e) {   // preview the pattern on the overlay under the cursor
+            if (!dragPattern) return;
+            const [cx, cy] = eventCell(e); clearOverlay(); octx.fillStyle = GHOST;
+            for (const [x, y] of patternAt(dragPattern.cells, cx, cy)) octx.fillRect(x, y, 1, 1);
+        }
+        function endPatternDrag(e, item, cancelled) {
+            if (!dragPattern) return;   // already ended (e.g. lostpointercapture firing right after pointerup)
+            item.onpointermove = item.onpointerup = item.onpointercancel = item.onlostpointercapture = null;
+            if (!cancelled && overBoard(e)) {
+                const [cx, cy] = eventCell(e);
+                sendBits(patternAt(dragPattern.cells, cx, cy).map(([x, y]) => y * overlay.width + x));
+                clearOnNextFrame = true;   // keep the ghost until the firmware echoes the cells back
+            } else { clearOverlay(); }
+            dragPattern = null;
+        }
+        function startPatternDrag(e, p) {
+            e.preventDefault();
+            dragPattern = p; clearOnNextFrame = false;
+            const item = e.currentTarget; item.setPointerCapture(e.pointerId);
+            item.onpointermove = ev => { ev.preventDefault(); ghostPattern(ev); };
+            item.onpointerup = ev => { ev.preventDefault(); endPatternDrag(ev, item, false); };
+            item.onpointercancel = ev => endPatternDrag(ev, item, true);
+            item.onlostpointercapture = ev => endPatternDrag(ev, item, true);   // safety net if capture drops without up/cancel
+            ghostPattern(e);
+        }
+        (function buildPalette() {
+            const root = document.getElementById('patterns');
+            PATTERNS.forEach(p => {
+                const cv = el('canvas', { width: 60, height: 60 });
+                drawThumb(cv, p.cells);
+                const item = el('div', { class: 'pat', title: p.name }, cv, el('span', {}, p.name));
+                item.onpointerdown = e => startPatternDrag(e, p);
+                root.append(item);
+            });
+        })();
 
         function onMessage(ev) {
             if (typeof ev.data !== 'string') { onBoardFrame(ev.data); return; }   // binary = board frame

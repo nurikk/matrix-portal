@@ -17,10 +17,12 @@
   X(uint16_t, burnStepMs,              "Burn step (ms)",     "Simulation",     29,    5,   200,   1, "Milliseconds per frame of the knock-triggered burn wave. Lower = faster burn.") \
   X(uint16_t, renderFrameMs,           "Render frame (ms)",  "Simulation",     33,   10,   200,   1, "Minimum milliseconds between LED redraws. Lower = higher frame rate, more CPU.") \
   X(uint16_t, minLiveCells,            "Min live cells",     "Simulation",      8,    0,   200,   1, "When live cells fall below this, fresh life is injected so the board never dies out.") \
+  X(uint8_t,  disableReseed,           "Disable auto-reseed","Simulation",      0,    0,     1,   1, "Let the board evolve untouched and die out: no min-live reseed and no random spawns.") \
   X(uint8_t,  hueStep,                 "Hue step",           "Color/fade",      3,    1,    64,   1, "Steps each cell's hue moves toward its target per frame. Higher = snappier color shifts.") \
   X(uint8_t,  satStep,                 "Saturation step",    "Color/fade",      7,    1,    64,   1, "How fast saturation approaches its target per frame. Higher = quicker intensity changes.") \
   X(uint8_t,  liveValueStep,           "Fade-in step",       "Color/fade",     10,    1,    64,   1, "How fast a newly born cell brightens to full. Higher = quicker fade-in.") \
   X(uint8_t,  deathValueStep,          "Fade-out step",      "Color/fade",      8,    1,    64,   1, "How fast a dying cell dims to black. Higher = quicker fade-out.") \
+  X(uint8_t,  noFade,                  "Classic (no fade)",  "Color/fade",      0,    0,     1,   1, "Cells snap fully on or off each frame -- classic Game of Life, no colour fade in or out.") \
   X(uint8_t,  mediumChunkMass,         "Medium chunk mass",  "Density",         7,    1,    32,   1, "Local cluster mass above which births slow slightly, throttling medium-density blobs.") \
   X(uint8_t,  largeChunkMass,          "Large chunk mass",   "Density",        12,    1,    48,   1, "Local cluster mass above which births slow more, throttling large blobs.") \
   X(uint8_t,  hugeChunkMass,           "Huge chunk mass",    "Density",        18,    1,    64,   1, "Local cluster mass above which births are throttled most, curbing runaway dense regions.") \

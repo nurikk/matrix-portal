@@ -55,6 +55,66 @@ void seedLife() {
   }
 }
 
+#if WIFI_PORTAL_ENABLED
+// Inject browser-drawn cells into the current generation. mask is a tight row-major
+// bitmask packed by w (bitIndex = y*w + x, LSB-first). Newly-live cells get seed-style
+// metadata so they bloom in and then evolve under Conway on the next stepLife().
+// Called only from webPortalTick() on core 1 (owns the cell arrays). The frame is already
+// clipped to the panel (x<w, y<h), so this only sets in-bounds cells; the toroidal
+// neighbour wrap the sim relies on lives in bitForX and is unaffected.
+void applyDrawnCells(const uint8_t *mask, uint8_t w, uint8_t h) {
+  for (uint8_t y = 0; y < h; y++) {
+    uint16_t bitBase = (uint16_t)y * w;        // mask stride: packed tight by w
+    uint16_t cellBase = (uint16_t)y * kMaxWidth;  // metadata stride: kMaxWidth
+
+    for (uint8_t x = 0; x < w; x++) {
+      uint16_t bitIndex = bitBase + x;
+      if (!(mask[bitIndex >> 3] & (1u << (bitIndex & 7)))) {
+        continue;
+      }
+      RowBits bit = bitForX[x];
+      if (currentRows[y] & bit) {
+        continue;   // already alive — don't double-count liveCells
+      }
+
+      currentRows[y] |= bit;
+      uint16_t index = cellBase + x;
+      cellType[index] = randomType();
+      cellHue[index] = relatedHue(cellType[index]);
+      cellSat[index] = 205 + (random32() & 31);
+      cellAge[index] = 0;
+      forceRedraw[index] = true;
+      liveCells++;
+    }
+  }
+}
+
+// Wipe the board to empty and black. Clear-all also stops the sim (gPaused set here on
+// core 1) so the cleared board persists instead of being instantly refilled by the
+// minLiveCells auto-reseed in stepLife(). Called only from the core-1 loop().
+void clearBoard() {
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    currentRows[y] = 0;
+    nextRows[y] = 0;
+  }
+  for (uint16_t i = 0; i < kCellCount; i++) {
+    cellAge[i] = 0;
+    burnHeat[i] = 0;
+    visualHue[i] = 0;
+    visualSat[i] = 0;
+    visualValue[i] = 0;
+    forceRedraw[i] = true;   // force renderFrame to repaint each cell black this frame
+  }
+  burnWaveActive = false;
+  pendingKnocks = 0;
+  pendingShakes = 0;
+  liveCells = 0;
+  changedCells = 0;
+  generation = 0;
+  gPaused = true;            // Clear-all freezes the sim so the empty board stays empty
+}
+#endif
+
 void recountNextStats(uint16_t &nextLiveCells, uint16_t &nextChangedCells) {
   nextLiveCells = 0;
   nextChangedCells = 0;
@@ -250,11 +310,14 @@ void stepLife() {
     nextRows[y] = nextRow & activeMask;
   }
   recountNextStats(nextLiveCells, nextChangedCells);
-  applyRandomEvents(nextChangedCells < 6 || nextLiveCells < gLive.minLiveCells);
+  // disableReseed = classic mode: no automatic life injection, so the board can die out.
+  if (!gLive.disableReseed) {
+    applyRandomEvents(nextChangedCells < 6 || nextLiveCells < gLive.minLiveCells);
+  }
   applyInteractionEvents();
   recountNextStats(nextLiveCells, nextChangedCells);
 
-  if (nextLiveCells < gLive.minLiveCells) {
+  if (!gLive.disableReseed && nextLiveCells < gLive.minLiveCells) {
     seedLife();
     return;
   }

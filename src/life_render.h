@@ -58,11 +58,19 @@ void renderFrame() {
       Hsv target = targetColorFor(index, x, y, alive);
       bool force = forceRedraw[index];
       forceRedraw[index] = false;
-      uint8_t nextHueValue = approachHue(visualHue[index], target.h, gLive.hueStep);
-      uint8_t nextSatValue = approach(visualSat[index], target.s, gLive.satStep);
-      uint8_t valueStep = burnHeat[index] ? gLive.liveValueStep
-                                          : (alive ? gLive.liveValueStep : gLive.deathValueStep);
-      uint8_t nextValue = approach(visualValue[index], target.v, valueStep);
+      uint8_t nextHueValue, nextSatValue, nextValue;
+      if (gLive.noFade) {
+        // Classic Game of Life: snap straight to the target each frame, no per-frame fade.
+        nextHueValue = target.h;
+        nextSatValue = target.s;
+        nextValue = target.v;
+      } else {
+        nextHueValue = approachHue(visualHue[index], target.h, gLive.hueStep);
+        nextSatValue = approach(visualSat[index], target.s, gLive.satStep);
+        uint8_t valueStep = burnHeat[index] ? gLive.liveValueStep
+                                            : (alive ? gLive.liveValueStep : gLive.deathValueStep);
+        nextValue = approach(visualValue[index], target.v, valueStep);
+      }
 
       if (!force && nextHueValue == visualHue[index] && nextSatValue == visualSat[index] &&
           nextValue == visualValue[index]) {

@@ -148,6 +148,8 @@ void loop() {
   }
   if (gReqReseed) { gReqReseed = false; seedLife(); }
   if (gReqBurn)   { gReqBurn = false; startBurnWave(); }
+  if (gReqClear)  { gReqClear = false; clearBoard(); }                     // clearBoard() pauses so the empty board persists
+  if (gReqPause)  { gPaused = (gReqPause > 0); gReqPause = 0; }             // explicit Stop/Resume; overrides clear's implicit pause
   if (gReqForget) { gReqForget = false; WiFi.disconnect(true, true); delay(200); ESP.restart(); }  // blocks ~200ms intentionally — device reboots immediately after
 #endif
   uint32_t loopStartedAt = micros();
@@ -157,6 +159,9 @@ void loop() {
   uint32_t now = millis();
   uint16_t simulationInterval = burnWaveActive ? gLive.burnStepMs : gLive.lifeStepMs;
   bool runSimulation = pendingKnocks || now - lastSimulationStepAt >= simulationInterval;
+#if WIFI_PORTAL_ENABLED
+  if (gPaused) runSimulation = false;   // Stop / Clear all from the web portal freezes the sim
+#endif
   bool rendered = false;
 
   if (runSimulation) {
