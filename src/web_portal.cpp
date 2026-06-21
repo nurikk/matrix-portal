@@ -7,7 +7,8 @@
 #include <WiFi.h>
 #include <WiFiProv.h>
 #include <ESPmDNS.h>
-#include <WebServer.h>
+#include <ESPAsyncWebServer.h>   // brings in AsyncWebSocket
+#include <ArduinoJson.h>
 #include "life_settings.h"
 
 extern LifeSettings gLive;
@@ -115,113 +116,194 @@ namespace {
 portMUX_TYPE gSettingsMux = portMUX_INITIALIZER_UNLOCKED;
 LifeSettings gPending;
 volatile bool gPendingDirty = false;
-WebServer gServer(80);
-TaskHandle_t gWebTask = nullptr;
 
-void sendSettingsJson() {
-  static char buf[12288];   // headroom for per-field labels + descriptions
-  size_t n = (size_t)snprintf(buf, sizeof(buf),
-      "{\"geometry\":{\"width\":%d,\"height\":%d,\"bitDepth\":%d,\"tile\":%d},\"settings\":",
-      (int)panelWidth, (int)panelHeight, gGeoBitDepth, gGeoTile);
-  LifeSettings liveCopy;
+AsyncWebServer gServer(80);
+AsyncWebSocket gWs("/ws");
+TaskHandle_t gPushTask = nullptr;
+
+constexpr size_t kMaxWsFrameBytes = 256;   // control frames are tiny; reject larger pre-parse
+constexpr uint32_t kStatsPushMs = 500;
+
+// Build the full settings schema. "live" = gPending (the desired copy, mutex-guarded) —
+// matches the old sendSettingsJson and avoids reading core-1-owned gLive from core 0.
+// Caller must NOT hold gSettingsMux.
+void buildSchemaDoc(JsonDocument &doc) {
+  LifeSettings pend;
   taskENTER_CRITICAL(&gSettingsMux);
-  liveCopy = gPending;
+  pend = gPending;
   taskEXIT_CRITICAL(&gSettingsMux);
-  n += serializeSettingsJson(liveCopy, gSaved, gDefaults, buf + n, sizeof(buf) - n);
-  if (n < sizeof(buf) - 1) {
-    n += (size_t)snprintf(buf + n, sizeof(buf) - n, "}");
+
+  doc["type"] = "schema";
+  JsonObject geo = doc["geometry"].to<JsonObject>();
+  geo["width"] = panelWidth;
+  geo["height"] = panelHeight;
+  geo["bitDepth"] = gGeoBitDepth;
+  geo["tile"] = gGeoTile;
+
+  JsonArray arr = doc["fields"].to<JsonArray>();
+  for (size_t i = 0; i < kLifeFieldCount; i++) {
+    JsonObject f = arr.add<JsonObject>();
+    f["key"] = kLifeFieldMeta[i].key;
+    f["label"] = kLifeFieldMeta[i].label;
+    f["group"] = kLifeFieldMeta[i].group;
+    f["min"] = kLifeFieldMeta[i].min;
+    f["max"] = kLifeFieldMeta[i].max;
+    f["step"] = kLifeFieldMeta[i].step;
+    f["live"] = getLifeSettingByIndex(pend, i);
+    f["saved"] = getLifeSettingByIndex(gSaved, i);
+    f["default"] = getLifeSettingByIndex(gDefaults, i);
+    f["desc"] = kLifeFieldMeta[i].desc;
   }
-  gServer.send(200, "application/json", buf);
 }
 
-void handleGetSettings() { sendSettingsJson(); }
-
-void handlePostSettings() {
-  LifeSettings work;
-  taskENTER_CRITICAL(&gSettingsMux);
-  work = gPending;
-  taskEXIT_CRITICAL(&gSettingsMux);
-  for (int i = 0; i < gServer.args(); i++) {
-    applyLifeSettingField(work, gServer.argName(i).c_str(), gServer.arg(i).toInt());
-  }
-  taskENTER_CRITICAL(&gSettingsMux);
-  gPending = work;
-  gPendingDirty = true;
-  taskEXIT_CRITICAL(&gSettingsMux);
-  sendSettingsJson();
+// Stats are read cross-core (core 1 writes, this runs on core 0) WITHOUT a lock. This is a
+// deliberate benign data race: liveCells/generation are intentionally non-volatile (read
+// per-cell in the render hot loop), aligned loads are atomic on Xtensa, and a torn/stale
+// number in a cosmetic readout is acceptable. Do not "fix" this with volatile.
+void buildStatsDoc(JsonDocument &doc) {
+  doc["type"] = "stats";
+  doc["renderFps"] = (unsigned)gStatRenderFps;
+  doc["lifeUps"] = (unsigned)gStatLifeUps;
+  doc["live"] = (unsigned)liveCells;
+  doc["generation"] = (unsigned long)generation;
+  doc["uptimeMs"] = (unsigned long)millis();
 }
 
-void publish(const LifeSettings &s) {
+void publishPending(const LifeSettings &s) {
   taskENTER_CRITICAL(&gSettingsMux);
   gPending = s;
   gPendingDirty = true;
   taskEXIT_CRITICAL(&gSettingsMux);
 }
 
-void handleSave() {
-  LifeSettings cur;
-  taskENTER_CRITICAL(&gSettingsMux);
-  cur = gPending;
-  taskEXIT_CRITICAL(&gSettingsMux);
-  settingsSaveToNvs(cur);
-  sendSettingsJson();
+// Broadcast the full schema to all clients (after a baseline change: save/revert/reset).
+void broadcastSchema() {
+  JsonDocument doc;
+  buildSchemaDoc(doc);
+  String out;
+  serializeJson(doc, out);
+  gWs.textAll(out);
 }
 
-void handleRevert() { publish(gSaved);    sendSettingsJson(); }
-void handleReset()  { publish(gDefaults); sendSettingsJson(); }
+// === Inbound message dispatcher — parse one JSON text frame and route it. ===
+// Runs in the AsyncTCP task (core 0). Returns true if understood. Reference implementation
+// below; this is the learning-mode contribution point (see plan note).
+bool dispatchWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t len) {
+  JsonDocument doc;
+  // cast: ArduinoJson's sized overload takes const char*, not uint8_t*.
+  if (deserializeJson(doc, reinterpret_cast<const char *>(data), len)) return false;  // parse error → ignore
+  const char *type = doc["type"] | "";
 
-void handleAction() {
-  String a = gServer.arg("do");
-  if (a == "reseed") gReqReseed = true;
-  else if (a == "burn") gReqBurn = true;
-  gServer.send(200, "application/json", "{\"ok\":true}");
+  if (strcmp(type, "set") == 0) {
+    const char *key = doc["key"] | "";
+    long value = doc["value"] | 0L;
+    LifeSettings work;
+    taskENTER_CRITICAL(&gSettingsMux);
+    work = gPending;
+    taskEXIT_CRITICAL(&gSettingsMux);
+    if (!applyLifeSettingField(work, key, value)) return false;   // unknown key
+    taskENTER_CRITICAL(&gSettingsMux);
+    gPending = work;
+    gPendingDirty = true;
+    taskEXIT_CRITICAL(&gSettingsMux);
+
+    // Echo the clamped value to OTHER clients for multi-tab sync.
+    long applied = value;
+    getLifeSettingByKey(work, key, &applied);
+    JsonDocument echo;
+    echo["type"] = "set";
+    echo["key"] = key;
+    echo["value"] = applied;
+    String out;
+    serializeJson(echo, out);
+    // getClients() returns std::list<AsyncWebSocketClient> (not pointers), so iterate by ref.
+    for (auto &c : gWs.getClients()) {
+      if (&c != client && c.canSend()) c.text(out);
+    }
+    return true;
+  }
+
+  if (strcmp(type, "action") == 0) {
+    const char *action = doc["action"] | "";
+    if (strcmp(action, "reseed") == 0) { gReqReseed = true; return true; }
+    if (strcmp(action, "burn") == 0)   { gReqBurn = true;   return true; }
+    if (strcmp(action, "forget") == 0) { gReqForget = true; return true; }
+    if (strcmp(action, "save") == 0) {
+      LifeSettings cur;
+      taskENTER_CRITICAL(&gSettingsMux);
+      cur = gPending;
+      taskEXIT_CRITICAL(&gSettingsMux);
+      settingsSaveToNvs(cur);
+      broadcastSchema();
+      return true;
+    }
+    if (strcmp(action, "revert") == 0) { publishPending(gSaved);    broadcastSchema(); return true; }
+    if (strcmp(action, "reset") == 0)  { publishPending(gDefaults); broadcastSchema(); return true; }
+  }
+  return false;
 }
 
-void handleStats() {
-  char buf[160];
-  snprintf(buf, sizeof(buf),
-      "{\"renderFps\":%u,\"lifeUps\":%u,\"live\":%u,\"generation\":%lu,\"uptimeMs\":%lu}",
-      (unsigned)gStatRenderFps, (unsigned)gStatLifeUps, (unsigned)liveCells,
-      (unsigned long)generation, (unsigned long)millis());
-  gServer.send(200, "application/json", buf);
+void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
+               void *arg, uint8_t *data, size_t len) {
+  (void)server;
+  switch (type) {
+    case WS_EVT_CONNECT: {
+      JsonDocument doc;
+      buildSchemaDoc(doc);
+      String out;
+      serializeJson(doc, out);
+      client->text(out);
+      break;
+    }
+    case WS_EVT_DATA: {
+      AwsFrameInfo *info = (AwsFrameInfo *)arg;
+      // Complete single-frame text only; reject oversized frames before deserializing.
+      if (info->final && info->index == 0 && info->len == len &&
+          info->opcode == WS_TEXT && len <= kMaxWsFrameBytes) {
+        dispatchWsMessage(client, data, len);
+      }
+      break;
+    }
+    default:
+      break;
+  }
 }
 
-void handleForget() {
-  gServer.send(200, "application/json", "{\"ok\":true,\"msg\":\"rebooting to provisioning\"}");
-  gReqForget = true;
-}
-
-void handleRoot()     { gServer.send_P(200, "text/html", kIndexHtml); }
-void handleNotFound() { gServer.send(404, "text/plain", "not found"); }
-
-void webTaskFn(void *) {
-  gServer.on("/", HTTP_GET, handleRoot);
-  gServer.on("/api/settings", HTTP_GET, handleGetSettings);
-  gServer.on("/api/settings", HTTP_POST, handlePostSettings);
-  gServer.on("/api/save", HTTP_POST, handleSave);
-  gServer.on("/api/revert", HTTP_POST, handleRevert);
-  gServer.on("/api/reset", HTTP_POST, handleReset);
-  gServer.on("/api/action", HTTP_POST, handleAction);
-  gServer.on("/api/stats", HTTP_GET, handleStats);
-  gServer.on("/api/forget-wifi", HTTP_POST, handleForget);
-  gServer.onNotFound(handleNotFound);
-  gServer.begin();
+// Core-0 task: broadcast ephemeral stats every kStatsPushMs and reap dead clients.
+// textAll drops the frame for any client whose per-client queue is full (ESP32Async
+// caps it) — exactly right for stats: a backed-up tab simply misses a tick.
+void wsPushTask(void *) {
   for (;;) {
-    gServer.handleClient();
-    vTaskDelay(1);
+    if (gWs.count() > 0) {
+      JsonDocument doc;
+      buildStatsDoc(doc);
+      String out;
+      serializeJson(doc, out);
+      gWs.textAll(out);
+    }
+    gWs.cleanupClients();
+    vTaskDelay(pdMS_TO_TICKS(kStatsPushMs));
   }
 }
 }  // namespace
 
 void webServerStart() {
-  if (gWebTask) {
-    return;  // already started; preserve in-flight gPending across WiFi reconnects
+  if (gPushTask) {
+    return;  // already started; idempotent across WiFi reconnects (preserves gPending)
   }
   taskENTER_CRITICAL(&gSettingsMux);
-  gPending = gLive;        // first connect only: start desired == current
+  gPending = gLive;        // first connect only: desired == current
   gPendingDirty = false;
   taskEXIT_CRITICAL(&gSettingsMux);
-  xTaskCreatePinnedToCore(webTaskFn, "web", 8192, nullptr, 1, &gWebTask, 0);  // core 0
+
+  gServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/html", kIndexHtml);
+  });
+  gWs.onEvent(onWsEvent);
+  gServer.addHandler(&gWs);
+  gServer.begin();
+
+  xTaskCreatePinnedToCore(wsPushTask, "wspush", 4096, nullptr, 1, &gPushTask, 0);  // core 0
 }
 
 void webPortalTick() {
@@ -231,7 +313,7 @@ void webPortalTick() {
     next = gPending;
     gPendingDirty = false;
     taskEXIT_CRITICAL(&gSettingsMux);
-    gLive = next;
+    gLive = next;          // the ONLY writer of gLive (core 1)
   }
 }
 
