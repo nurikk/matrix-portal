@@ -38,8 +38,51 @@
 
         main {
             padding: 16px;
-            max-width: 760px;
+            max-width: 1100px;
             margin: 0 auto
+        }
+
+        .board-wrap {
+            display: flex;
+            justify-content: center;
+            margin: 0 0 16px
+        }
+
+        #board {
+            display: block;
+            width: 100%;
+            max-width: 480px;
+            height: auto;
+            image-rendering: pixelated;
+            background: #000;
+            border: 1px solid #232838;
+            border-radius: 10px
+        }
+
+        /* Wide screens: two columns — config on the left, live canvas on the right.
+           The canvas is placed in column 2 (despite coming first in the DOM, so it
+           stacks on top when this grid collapses on narrow screens) and sticks in
+           view while the settings list scrolls. */
+        @media (min-width: 760px) {
+            main {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) 380px;
+                gap: 20px;
+                align-items: start
+            }
+
+            #groups {
+                grid-column: 1;
+                grid-row: 1
+            }
+
+            .board-wrap {
+                grid-column: 2;
+                grid-row: 1;
+                position: sticky;
+                top: 84px;
+                margin: 0
+            }
         }
 
         fieldset {
@@ -132,7 +175,10 @@
         <div class="geo" id="geo"></div>
         <div class="geo" id="stats"></div>
     </header>
-    <main id="groups"></main>
+    <main>
+        <div class="board-wrap"><canvas id="board" width="64" height="64"></canvas></div>
+        <div id="groups"></div>
+    </main>
     <div class="bar">
         <button class="primary" onclick="act('save')">Save</button>
         <button onclick="act('revert')">Revert to saved</button>
@@ -148,6 +194,7 @@
         let ws;
         let myClientId = null;  // assigned from the schema message; used to ignore our own echoes
         const controls = {};   // key -> { num, rng }
+        let bctx, bimg;         // board canvas 2d context + cached ImageData (rebuilt on resize)
 
         function send(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
         const sendField = debounce((key, value) => send({ type: 'set', key, value }), 120);
@@ -179,7 +226,32 @@
         function applyRemoteSet(key, value) { const c = controls[key]; if (c) { c.num.value = value; c.rng.value = value; } }
         function showStats(s) { document.getElementById('stats').textContent = `${s.renderFps} fps · ${s.lifeUps} ups · ${s.live} live · gen ${s.generation}`; }
 
+        // Binary board frame: 6-byte header (magic 'L', version, width, height; little-endian)
+        // followed by width*height RGB565 pixels. Expand 565 -> 888 with bit replication and
+        // blit onto the canvas at native resolution (CSS scales it up, pixelated).
+        function onBoardFrame(buf) {
+            const dv = new DataView(buf);
+            if (buf.byteLength < 6 || dv.getUint8(0) !== 0x4C) return;
+            const w = dv.getUint16(2, true), h = dv.getUint16(4, true);
+            const cells = w * h;
+            if (buf.byteLength < 6 + cells * 2) return;
+            const cv = document.getElementById('board');
+            if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; bimg = null; }
+            if (!bctx) bctx = cv.getContext('2d');
+            if (!bimg) bimg = bctx.createImageData(w, h);
+            // Wire format is little-endian; Uint16Array reads in host byte order, which is
+            // little-endian on every browser platform this panel runs on (x86/ARM). Fast path.
+            const px = new Uint16Array(buf, 6, cells);   // RGB565
+            const d = bimg.data;
+            for (let i = 0, j = 0; i < cells; i++, j += 4) {
+                const c = px[i], r5 = (c >> 11) & 0x1f, g6 = (c >> 5) & 0x3f, b5 = c & 0x1f;
+                d[j] = (r5 << 3) | (r5 >> 2); d[j + 1] = (g6 << 2) | (g6 >> 4); d[j + 2] = (b5 << 3) | (b5 >> 2); d[j + 3] = 255;
+            }
+            bctx.putImageData(bimg, 0, 0);
+        }
+
         function onMessage(ev) {
+            if (typeof ev.data !== 'string') { onBoardFrame(ev.data); return; }   // binary = board frame
             let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
             if (m.type === 'schema') { if (m.clientId !== undefined) myClientId = m.clientId; buildSchema(m); }
             else if (m.type === 'stats') showStats(m);
@@ -188,6 +260,7 @@
 
         function connect() {
             ws = new WebSocket(`ws://${location.host}/ws`);
+            ws.binaryType = 'arraybuffer';   // board frames arrive as ArrayBuffer, not Blob
             ws.onmessage = onMessage;
             ws.onclose = () => setTimeout(connect, 1000);   // auto-reconnect
             ws.onerror = () => { try { ws.close(); } catch (e) { } };

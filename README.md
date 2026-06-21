@@ -125,6 +125,12 @@ over the WebSocket, which erases NVS credentials and reboots the device).
 `http://matrixportal.local/` (plain HTTP, port 80) in any browser on the same network (or use the scrolled IP
 directly).
 
+**Live board view:** the panel mirrors the LED matrix in real time on a `<canvas>` at the
+top of the page. The device streams the board ~10×/second as compact binary WebSocket
+frames (a small header plus the panel's raw RGB565 pixels); the browser expands them to
+full colour and draws them pixel-for-pixel. The stream is gated on socket backpressure, so
+a slow or backgrounded client simply drops frames rather than backing up the device.
+
 **Live-preview + Save model:** every slider move applies the new value immediately so
 you can see the effect in real time. Changes are ephemeral until you press **Save**,
 which persists them to NVS. **Revert** restores the last saved values; **Reset**
@@ -133,7 +139,7 @@ Hardware geometry (`MATRIX_WIDTH`, `MATRIX_BIT_DEPTH`, etc.) stays compile-time 
 shown read-only in the panel.
 
 **Partition note:** `[env:matrixportal_s3]` uses `board_build.partitions = huge_app.csv`
-to accommodate BLE + WiFi + application code. The S3 binary occupies roughly 48% of the
+to accommodate BLE + WiFi + application code. The S3 binary occupies roughly 51% of the
 3 MB app partition.
 
 ## Development

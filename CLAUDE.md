@@ -77,13 +77,14 @@ so `pio test` won't try to run these on-target.)
   unchanged.
 - **Two cores, one `gLive`.** AsyncTCP is pinned to **core 0** via
   `-D CONFIG_ASYNC_TCP_RUNNING_CORE=0`; the Life `loop()` runs on **core 1**. WebSocket
-  callbacks and a core-0 `wsPushTask` (broadcasts stats ~every 500 ms, calls
-  `cleanupClients`) stage incoming edits into `gPending` (under `gSettingsMux`);
-  `webPortalTick()` on core 1 promotes them into `gLive` and handles deferred actions
-  (reseed, burn, forget-wifi reboot) — `gLive` is never written from core 0. Do not read
-  `gPending` or write `gLive` outside this protocol. `liveCells`/`generation` are
-  intentionally non-volatile (read per-cell in the render hot loop); stats are an accepted
-  benign cross-core race — do not add `volatile`.
+  callbacks and a core-0 `wsPushTask` (broadcasts a binary board frame ~every 100 ms and
+  stats ~every 500 ms, calls `cleanupClients`) stage incoming edits into `gPending` (under
+  `gSettingsMux`); `webPortalTick()` on core 1 promotes them into `gLive` and handles
+  deferred actions (reseed, burn, forget-wifi reboot) — `gLive` is never written from core
+  0. Do not read `gPending` or write `gLive` outside this protocol. `liveCells`/`generation`
+  are intentionally non-volatile (read per-cell in the render hot loop); stats **and** the
+  board frame (core 0 reads `drawnColor` via `copyDrawnFrame` while core 1 writes it) are
+  accepted benign cross-core races — do not add `volatile`.
 - **`huge_app.csv` partition.** `[env:matrixportal_s3]` uses this partition table to fit
   BLE + WiFi + app code. Switching back to the default partition table will cause the S3
   binary to overflow.
@@ -109,7 +110,9 @@ that one TU (see the single-TU note above). The Life headers, in include/depende
 - **`life_color.h`** — `hsv565`/`color565`, `hueDelta`/`relatedHue`/`mutateHue`/`blendHue`,
   and `NeighborMix` mixing (`addNeighbor`/`mixedHue`/`mixedSaturation`).
 - **`life_render.h`** — `targetColorFor` (per-cell target HSV) + `renderFrame` (approach +
-  dirty draw). Note: `renderFrame` currently scans **every** cell each frame.
+  dirty draw). Note: `renderFrame` currently scans **every** cell each frame. Also defines
+  `copyDrawnFrame` (S3 only): packs the active panel's `drawnColor` RGB565 image, de-strided
+  from `kMaxWidth` to a tight `panelWidth*panelHeight`, for the core-0 web board stream.
 - **`life_burn.h`** — the burn-wave state machine
   (`startBurnWave`/`stepBurnWave`/`finishBurnWave`, `clearBurnHeat`).
 - **`life_input.h`** — `pollAccelerometer`, `updateTiltState`, knock/shake detection
@@ -146,10 +149,15 @@ Standalone / unchanged supporting files:
 - **Web portal** (`src/web_portal.cpp`, `src/web_ui.h`, S3 Life only) — BLE WiFi
   provisioning (`PROV_MatrixLife`, PoP `matrixlife`), mDNS (`matrixportal.local`), an
   `AsyncWebServer` on port 80 with two routes only: `GET /` (HTML) and `/ws`
-  (`AsyncWebSocket`). There is no REST API and no client polling. All JSON is
-  crafted/parsed with **ArduinoJson v7**; the portal walks `kLifeFieldMeta` from
-  `life_settings.h` to build settings JSON. A core-0 `wsPushTask` broadcasts live stats
-  (~every 500 ms) and calls `cleanupClients`. Incoming WS edits and actions are staged into
+  (`AsyncWebSocket`). There is no REST API and no client polling. Control traffic (schema,
+  stats, `set`/`action`) is JSON crafted/parsed with **ArduinoJson v7** on WS **text**
+  frames; the live board is streamed on WS **binary** frames (a 6-byte little-endian header
+  — magic `'L'`, version, width, height — then `width*height` row-major RGB565 pixels), so
+  text and binary never collide on the one socket. The browser expands 565→888 onto a
+  `<canvas>`. The portal walks `kLifeFieldMeta` from `life_settings.h` to build settings
+  JSON. A core-0 `wsPushTask` broadcasts the board (~every 100 ms, via a single ref-counted
+  `makeBuffer`/`binaryAll`) and stats (~every 500 ms) under one `availableForWriteAll()`
+  backpressure gate, and calls `cleanupClients`. Incoming WS edits and actions are staged into
   `gPending` (under `gSettingsMux`); `webPortalTick()` (called from the core-1 loop)
   promotes them into `gLive` and handles deferred actions (reseed, burn, forget-wifi
   reboot). NVS persistence via `settingsLoadNvs` / `settingsSaveNvs`. New deps in

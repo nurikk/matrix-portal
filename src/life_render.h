@@ -93,3 +93,27 @@ void renderFrame() {
   profileRenderSamples++;
   framesThisPeriod++;
 }
+
+#if WIFI_PORTAL_ENABLED
+// Copy the active panel's drawn RGB565 image into dst, tightly packed row-major:
+// dst[y * panelWidth + x]. dst must hold at least panelWidth*panelHeight uint16_t.
+// drawnColor is strided by the compile-time kMaxWidth (panelWidth may be narrower),
+// so the copy can't be a single memcpy -- it walks row by row.
+//
+// Called from the core-0 web push task while core 1 may be mid-renderFrame() writing
+// drawnColor. This follows the same philosophy as the lock-free stats reads in
+// web_portal.cpp, but is broader in scope: stats are one stale scalar, whereas this whole
+// 32KB snapshot can blend two generations. That's fine here — each entry is a 16-bit
+// aligned load (atomic on Xtensa) so no individual pixel tears, and a frame that mixes
+// generations is cosmetically harmless and superseded by the next push ~100 ms later.
+// Do NOT add volatile or locks (same project rule as the stats race).
+void copyDrawnFrame(uint16_t *dst) {
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    const uint16_t *srcRow = &drawnColor[(uint16_t)y * kMaxWidth];
+    uint16_t *dstRow = &dst[(uint16_t)y * panelWidth];
+    for (uint8_t x = 0; x < panelWidth; x++) {
+      dstRow[x] = srcRow[x];
+    }
+  }
+}
+#endif

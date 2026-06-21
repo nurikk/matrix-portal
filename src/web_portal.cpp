@@ -26,6 +26,11 @@ extern uint8_t panelHeight;
 extern int gGeoBitDepth;
 extern int gGeoTile;
 
+// Defined in life_render.h (the core-1 Life translation unit). Packs the active
+// panel's RGB565 image into dst[panelWidth*panelHeight]. Reading it from core 0 is a
+// documented benign cross-core race (see the comment on the definition).
+void copyDrawnFrame(uint16_t *dst);
+
 #include "web_ui.h"
 
 void webServerStart();  // defined below; called from onWiFiEvent
@@ -123,6 +128,16 @@ TaskHandle_t gPushTask = nullptr;
 
 constexpr size_t kMaxWsFrameBytes = 256;   // control frames are tiny; reject larger pre-parse
 constexpr uint32_t kStatsPushMs = 500;
+
+// --- Live board mirror (binary frames) ---
+// The board is streamed to browsers as binary WS frames (JSON stays on text frames, so
+// the two never collide). Layout, all little-endian:
+//   [0]    magic 0x4C ('L')   [1] version   [2..3] width   [4..5] height
+//   [6..]  width*height RGB565 pixels, row-major (same bit layout as Adafruit GFX 565).
+constexpr uint32_t kFramePushMs = 100;     // ~10 fps board mirror — smooth, LAN-cheap
+constexpr uint8_t kFrameMagic = 0x4C;      // 'L'
+constexpr uint8_t kFrameVersion = 1;
+constexpr size_t kFrameHeaderBytes = 6;
 
 // Build the full settings schema. "live" = gPending (the desired copy, mutex-guarded) —
 // matches the old sendSettingsJson and avoids reading core-1-owned gLive from core 0.
@@ -268,22 +283,54 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
   }
 }
 
-// Core-0 task: broadcast ephemeral stats every kStatsPushMs and reap dead clients.
-// Backpressure: gate on availableForWriteAll() and skip the whole tick if any client is
-// backed up (stats are ephemeral — the next tick supersedes them). We use all-or-nothing
-// availableForWriteAll() rather than per-client canSend(), because per-client gating needs
-// gWs.getClients() iteration, which would race cleanupClients().
+// Broadcast one binary board frame (header + RGB565 pixels) to all clients via a single
+// shared, ref-counted buffer. Caller has already checked count()>0 and availableForWriteAll().
+// Frames are ephemeral: if the heap can't hand us a contiguous block we just skip this one.
+void pushBoardFrame() {
+  const size_t cells = (size_t)panelWidth * panelHeight;
+  const size_t total = kFrameHeaderBytes + cells * 2;
+  // Avoid the OOM-abort path: only allocate if a big-enough contiguous block exists.
+  if (ESP.getMaxAllocHeap() < total + 512) return;
+  AsyncWebSocketMessageBuffer *buf = gWs.makeBuffer(total);
+  if (!buf) return;
+  if (buf->length() != total) { delete buf; return; }
+
+  uint8_t *p = buf->get();
+  p[0] = kFrameMagic;
+  p[1] = kFrameVersion;
+  p[2] = (uint8_t)(panelWidth & 0xFF);
+  p[3] = (uint8_t)(panelWidth >> 8);
+  p[4] = (uint8_t)(panelHeight & 0xFF);
+  p[5] = (uint8_t)(panelHeight >> 8);
+  // p+6 is 2-byte aligned (vector data is over-aligned, header is even), so the uint16
+  // writes inside copyDrawnFrame are well-aligned for Xtensa. Memory is little-endian, so
+  // each RGB565 lands low-byte-first on the wire — matching the browser's Uint16Array read.
+  copyDrawnFrame(reinterpret_cast<uint16_t *>(p + kFrameHeaderBytes));
+  gWs.binaryAll(buf);   // moves the shared buffer into each client's queue, then deletes buf
+}
+
+// Core-0 task: stream the board (~kFramePushMs) and ephemeral stats (~kStatsPushMs), then
+// reap dead clients. Backpressure: gate the whole tick on availableForWriteAll() and skip
+// it if any client is backed up — both payloads are ephemeral, the next tick supersedes
+// them. We use all-or-nothing availableForWriteAll() rather than per-client canSend(),
+// because per-client gating needs gWs.getClients() iteration, which would race cleanupClients().
 void wsPushTask(void *) {
+  uint32_t lastStatsAt = 0;
   for (;;) {
     if (gWs.count() > 0 && gWs.availableForWriteAll()) {
-      JsonDocument doc;
-      buildStatsDoc(doc);
-      String out;
-      serializeJson(doc, out);
-      gWs.textAll(out);
+      pushBoardFrame();
+      uint32_t nowMs = millis();
+      if (nowMs - lastStatsAt >= kStatsPushMs) {
+        lastStatsAt = nowMs;
+        JsonDocument doc;
+        buildStatsDoc(doc);
+        String out;
+        serializeJson(doc, out);
+        gWs.textAll(out);
+      }
     }
     gWs.cleanupClients();
-    vTaskDelay(pdMS_TO_TICKS(kStatsPushMs));
+    vTaskDelay(pdMS_TO_TICKS(kFramePushMs));
   }
 }
 }  // namespace
