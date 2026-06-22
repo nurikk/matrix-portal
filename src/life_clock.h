@@ -26,7 +26,7 @@ struct ClockAnimationState {
 constexpr uint16_t kClockMinuteAnimationMs = 2000;
 constexpr uint16_t kClockHourAnimationMs = 12000;
 constexpr uint16_t kClockPostAnimationHoldMs = 5000;
-constexpr uint8_t kClockMinuteScheduleInterval = 3;
+constexpr uint8_t kClockMinuteScheduleInterval = 5;
 constexpr time_t kClockValidEpoch = 1609459200;   // before 2021 means SNTP has not synced yet
 
 ClockAnimationState gClockAnimation = {};
@@ -149,19 +149,6 @@ ClockAnimationKind clockKindForRequest(uint8_t request) {
   }
 }
 
-void clockAdvanceToDemoTarget(ClockAnimationKind kind, uint8_t &hour, uint8_t &minute) {
-  uint16_t total = static_cast<uint16_t>(hour) * 60 + minute;
-  if (kind == kClockAnimationMinute) {
-    uint8_t minuteOffset = kClockMinuteScheduleInterval - (total % kClockMinuteScheduleInterval);
-    total += minuteOffset;
-  } else if (kind == kClockAnimationHour) {
-    total += 60 - minute;
-  }
-  total %= 24 * 60;
-  hour = total / 60;
-  minute = total % 60;
-}
-
 bool startClockAnimationRequest(uint8_t request, uint32_t nowMs) {
   ClockAnimationKind kind = clockKindForRequest(request);
   if (kind == kClockAnimationNone) {
@@ -183,7 +170,6 @@ bool startClockAnimationRequest(uint8_t request, uint32_t nowMs) {
     minute = uptimeMinute % 60;
   }
 
-  clockAdvanceToDemoTarget(kind, hour, minute);
   return beginClockAnimation(kind, hour, minute, eventMinuteId, nowMs,
                              nowMs + clockDurationMillisFor(kind));
 }
@@ -297,7 +283,7 @@ bool clockDigitPixel(uint8_t digit, uint8_t col, uint8_t row) {
   return kClockDigitRows[digit][row] & (1 << (2 - col));
 }
 
-bool clockDigitalPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &hsv) {
+bool clockDigitalGrid(uint8_t x, uint8_t y, uint8_t &col, uint8_t &row) {
   uint8_t sx = panelWidth / 18;
   uint8_t sy = panelHeight / 8;
   if (sx < 1) sx = 1;
@@ -314,8 +300,21 @@ bool clockDigitalPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &
     return false;
   }
 
-  uint8_t col = (x - ox) / sx;
-  uint8_t row = (y - oy) / sy;
+  col = (x - ox) / sx;
+  row = (y - oy) / sy;
+  return true;
+}
+
+bool clockDigitalColonCell(uint8_t col, uint8_t row) {
+  return col == 8 && (row == 1 || row == 3);
+}
+
+bool clockDigitalPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &hsv) {
+  uint8_t col, row;
+  if (!clockDigitalGrid(x, y, col, row)) {
+    return false;
+  }
+
   uint8_t digits[4] = {
       static_cast<uint8_t>(hour / 10), static_cast<uint8_t>(hour % 10),
       static_cast<uint8_t>(minute / 10), static_cast<uint8_t>(minute % 10)};
@@ -331,7 +330,7 @@ bool clockDigitalPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &
     return true;
   }
   if (col == 8) {
-    if (row != 1 && row != 3) return false;
+    if (!clockDigitalColonCell(col, row)) return false;
     hsv = {96, 180, 220};
     return true;
   }
@@ -347,6 +346,66 @@ bool clockDigitalPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &
   }
 
   return false;
+}
+
+uint8_t clockMinuteColonScale(uint32_t elapsedMs) {
+  uint16_t phase = elapsedMs % 1000;
+  if (phase < 420) return 255;
+  if (phase < 540) return static_cast<uint8_t>(255 - ((phase - 420) * 205UL) / 120);
+  if (phase < 850) return 50;
+  return static_cast<uint8_t>(50 + ((phase - 850) * 205UL) / 150);
+}
+
+uint8_t clockMinuteSparkle(uint8_t x, uint8_t y, bool inGrid, uint32_t elapsedMs) {
+  if (!inGrid) {
+    return 0;
+  }
+
+  uint16_t hash = clockPixelHash(x, y, gClockAnimation.eventMinuteId);
+  if ((hash & 0x7F) != ((elapsedMs / 85) & 0x7F)) {
+    return 0;
+  }
+
+  uint8_t twinkle = triWave6((elapsedMs / 28 + (hash >> 8)) & 63) * 5;
+  return twinkle > 110 ? 110 : twinkle;
+}
+
+uint16_t clockMinuteAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
+                                  bool targetPixel, uint8_t targetWeight,
+                                  uint8_t easedProgress, uint32_t nowMs) {
+  uint32_t elapsedMs = nowMs - gClockAnimation.startedAt;
+  uint8_t col = 0, row = 0;
+  bool inGrid = clockDigitalGrid(x, y, col, row);
+
+  if (targetPixel) {
+    uint8_t hue = nextHue[index];
+    uint8_t sat = nextSat[index];
+    uint8_t value = nextType[index];
+    uint8_t shimmer = triWave6(elapsedMs / 46 + x * 3 + y * 5) * 2;
+
+    value = addSaturated(value, shimmer);
+    hue = wrapHue(hue + (shimmer >> 3));
+
+    if (inGrid && clockDigitalColonCell(col, row)) {
+      uint8_t colon = clockMinuteColonScale(elapsedMs);
+      targetWeight = (static_cast<uint16_t>(targetWeight) * colon) / 255;
+      hue = wrapHue(88 + (colon >> 2));
+      sat = 170;
+      value = addSaturated(190, colon >> 2);
+    }
+
+    return hsv565(hue, sat, (static_cast<uint16_t>(value) * targetWeight) / 255);
+  }
+
+  uint8_t accent = 0;
+  uint8_t sparkle = clockMinuteSparkle(x, y, inGrid, elapsedMs);
+  if (sparkle > accent) accent = sparkle;
+  if (accent == 0) {
+    return 0;
+  }
+
+  accent = static_cast<uint8_t>((accent * static_cast<uint16_t>(easedProgress)) / 255);
+  return hsv565(wrapHue(106 + (elapsedMs / 24) + x + y), 185, accent);
 }
 
 bool clockNearLine(int16_t x, int16_t y, int16_t x0, int16_t y0,
@@ -503,53 +562,6 @@ uint8_t clockRevealWeight(ClockAnimationKind kind, uint8_t x, uint8_t y, uint8_t
   return delta > 42 ? 255 : static_cast<uint8_t>((delta * 255) / 42);
 }
 
-uint8_t clockTransitionGlow(ClockAnimationKind kind, uint8_t x, uint8_t y, uint8_t progress) {
-  if (progress > 245) {
-    return 0;
-  }
-
-  int16_t cx = (panelWidth - 1) / 2;
-  int16_t cy = (panelHeight - 1) / 2;
-  uint16_t md = clockMinDimension();
-  uint16_t dist = clockApproxDistance(x, y, cx, cy);
-  uint16_t maxDist = clockApproxDistance(0, 0, cx, cy);
-  if (maxDist == 0) maxDist = 1;
-  uint16_t front = 0;
-  uint16_t pos = 0;
-  uint8_t width = md / 12 + 2;
-
-  if (kind == kClockAnimationMinute) {
-    front = (static_cast<uint16_t>(progress) * panelWidth) / 255;
-    pos = x;
-    width = panelWidth / 12 + 2;
-  } else {
-    front = (static_cast<uint16_t>(255 - progress) * maxDist) / 255;
-    pos = dist;
-    width = md / 8 + 3;
-  }
-
-  uint16_t delta = front > pos ? front - pos : pos - front;
-  if (delta > width) {
-    return 0;
-  }
-  uint16_t glow = ((width - delta) * 180) / width;
-  return static_cast<uint8_t>((glow * (255 - (progress >> 2))) / 255);
-}
-
-uint16_t blendScaled565(uint16_t a, uint8_t aw, uint16_t b, uint8_t bw) {
-  uint16_t ar = ((a >> 11) & 0x1F) * 255 / 31;
-  uint16_t ag = ((a >> 5) & 0x3F) * 255 / 63;
-  uint16_t ab = (a & 0x1F) * 255 / 31;
-  uint16_t br = ((b >> 11) & 0x1F) * 255 / 31;
-  uint16_t bg = ((b >> 5) & 0x3F) * 255 / 63;
-  uint16_t bb = (b & 0x1F) * 255 / 31;
-
-  uint16_t r = (ar * aw + br * bw) / 255;
-  uint16_t g = (ag * aw + bg * bw) / 255;
-  uint16_t blue = (ab * aw + bb * bw) / 255;
-  return color565(clockClamp8(r), clockClamp8(g), clockClamp8(blue));
-}
-
 uint16_t clockScaledHsv565(uint8_t hue, uint8_t saturation, uint8_t value, uint8_t scale) {
   return hsv565(hue, saturation, (static_cast<uint16_t>(value) * scale) / 255);
 }
@@ -583,18 +595,17 @@ void renderClockAnimationFrame(uint32_t nowMs) {
       uint16_t index = baseIndex + x;
       bool targetPixel = targetRow & bitForX[x];
       uint8_t targetWeight = targetPixel ? clockRevealWeight(gClockAnimation.kind, x, y, eased) : 0;
-      uint16_t targetColor = targetPixel ? clockScaledHsv565(nextHue[index], nextSat[index],
-                                                            nextType[index], targetWeight) : 0;
+      uint16_t targetColor = 0;
+      if (gClockAnimation.kind == kClockAnimationMinute) {
+        targetColor = clockMinuteAnimatedColor(index, x, y, targetPixel, targetWeight,
+                                               eased, nowMs);
+      } else if (targetPixel) {
+        targetColor = clockScaledHsv565(nextHue[index], nextSat[index],
+                                        nextType[index], targetWeight);
+      }
       uint16_t color = progress >= 254 ? targetColor :
                        approachColor565(drawnColor[index], targetColor,
                                          clockColorStep(gClockAnimation.kind));
-
-      uint8_t glow = gClockAnimation.kind == kClockAnimationMinute
-                         ? clockTransitionGlow(gClockAnimation.kind, x, y, progress)
-                         : 0;
-      if (glow) {
-        color = blendScaled565(color, 255, hsv565(112, 210, 255), glow);
-      }
 
       if (color != drawnColor[index]) {
         drawnColor[index] = color;
