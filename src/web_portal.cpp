@@ -19,6 +19,7 @@ extern volatile bool gReqBurn;
 extern volatile bool gReqForget;
 extern volatile int8_t gReqPause;
 extern volatile bool gReqClear;
+extern volatile bool gPaused;
 extern volatile uint16_t gStatRenderFps;
 extern volatile uint16_t gStatLifeUps;
 extern uint16_t liveCells;
@@ -211,6 +212,7 @@ void buildSchemaDoc(JsonDocument &doc) {
 // number in a cosmetic readout is acceptable. Do not "fix" this with volatile.
 void buildStatsDoc(JsonDocument &doc) {
   doc["type"] = "stats";
+  doc["paused"] = (bool)gPaused;   // authoritative sim state so the client's Pause/Resume toggle can't drift
   doc["renderFps"] = (unsigned)gStatRenderFps;
   doc["lifeUps"] = (unsigned)gStatLifeUps;
   doc["live"] = (unsigned)liveCells;

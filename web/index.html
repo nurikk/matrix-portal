@@ -1110,13 +1110,18 @@
         // ============================================================
         // Live telemetry: readouts + the population sparkline (the signature)
         // ============================================================
-        let running = true, lastGen = null;
+        // The firmware reports the authoritative pause state in every stats frame (s.paused),
+        // so the toggle can't drift out of sync (reconnect, another tab, burn auto-resuming).
+        // A click flips the label optimistically and holds off stats reconciliation briefly
+        // (syncHoldUntil) so a stale in-flight frame from just before the command landed can't
+        // flicker the button back.
+        let running = true, syncHoldUntil = 0;
         function setRunningUI() {
             const b = $('playBtn');
             b.textContent = running ? 'Pause' : 'Resume';
             b.classList.toggle('btn--go', !running);   // green when pressing it brings the colony back to life
         }
-        $('playBtn').onclick = () => { running = !running; act(running ? 'resume' : 'stop'); setRunningUI(); };
+        $('playBtn').onclick = () => { running = !running; act(running ? 'resume' : 'stop'); syncHoldUntil = Date.now() + 1000; setRunningUI(); };
 
         function fmtUptime(ms) {
             const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60;
@@ -1141,11 +1146,9 @@
                 $('link').title = `${s.frameBytes} B/frame vs ${raw} B raw — ${saved}% saved by ${enc}`;
             }
             pushPop(s.live);
-            // Let observed motion CONFIRM the colony is running, but never force "paused" on a
-            // flat reading: a slow sim (large life-step) may not advance between two stat samples,
-            // and a paused-by-another-tab case is rare. This keeps the toggle from lying mid-run.
-            if (lastGen !== null && s.generation > lastGen) running = true;
-            lastGen = s.generation;
+            // Trust the firmware's authoritative pause flag, except in the brief window right
+            // after a click (syncHoldUntil) where a stale in-flight frame could lie.
+            if (typeof s.paused === 'boolean' && Date.now() >= syncHoldUntil) running = !s.paused;
             setRunningUI();
         }
 

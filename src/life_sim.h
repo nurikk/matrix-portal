@@ -57,8 +57,10 @@ void seedLife() {
 
 #if WIFI_PORTAL_ENABLED
 // Inject browser-drawn cells into the current generation. mask is a tight row-major
-// bitmask packed by w (bitIndex = y*w + x, LSB-first). Newly-live cells get seed-style
-// metadata so they bloom in and then evolve under Conway on the next stepLife().
+// bitmask packed by w (bitIndex = y*w + x, LSB-first). Newly-live cells get living-cell
+// metadata and start at cellAge=6 so they render at full saturation immediately: drawing is
+// typically done while the sim is paused, where stepLife() never advances cellAge, so the
+// age<6 "bloom" desaturation in targetColorFor would otherwise leave them washed-out white.
 // Called only from webPortalTick() on core 1 (owns the cell arrays). The frame is already
 // clipped to the panel (x<w, y<h), so this only sets in-bounds cells; the toroidal
 // neighbour wrap the sim relies on lives in bitForX and is unaffected.
@@ -82,7 +84,7 @@ void applyDrawnCells(const uint8_t *mask, uint8_t w, uint8_t h) {
       cellType[index] = randomType();
       cellHue[index] = relatedHue(cellType[index]);
       cellSat[index] = 205 + (random32() & 31);
-      cellAge[index] = 0;
+      cellAge[index] = 6;   // skip the age<6 bloom desaturation so the cell is coloured even while paused
       forceRedraw[index] = true;
       liveCells++;
     }
