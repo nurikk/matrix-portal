@@ -566,7 +566,6 @@ bool dispatchWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t
     if (strcmp(action, "clear") == 0)  { gReqClear = true;  return true; }
     if (strcmp(action, "forget") == 0) { gReqForget = true; return true; }
     if (strcmp(action, "clockMinute") == 0) { gReqClockAnimation = kClockAnimationRequestMinute; return true; }
-    if (strcmp(action, "clockFive") == 0)   { gReqClockAnimation = kClockAnimationRequestFiveMinute; return true; }
     if (strcmp(action, "clockHour") == 0)   { gReqClockAnimation = kClockAnimationRequestHour; return true; }
     if (strcmp(action, "detectTimezone") == 0) { clockRequestDetect(/*saveDetected=*/false); return true; }
     if (strcmp(action, "save") == 0) {

@@ -5,7 +5,6 @@
 enum ClockAnimationKind : uint8_t {
   kClockAnimationNone = 0,
   kClockAnimationMinute,
-  kClockAnimationFiveMinute,
   kClockAnimationHour,
 };
 
@@ -25,9 +24,9 @@ struct ClockAnimationState {
 #include <time.h>
 
 constexpr uint16_t kClockMinuteAnimationMs = 2000;
-constexpr uint16_t kClockFiveMinuteAnimationMs = 6000;
 constexpr uint16_t kClockHourAnimationMs = 12000;
 constexpr uint16_t kClockPostAnimationHoldMs = 5000;
+constexpr uint8_t kClockMinuteScheduleInterval = 3;
 constexpr time_t kClockValidEpoch = 1609459200;   // before 2021 means SNTP has not synced yet
 
 ClockAnimationState gClockAnimation = {};
@@ -78,8 +77,6 @@ uint8_t clockDurationMsFor(ClockAnimationKind kind) {
   switch (kind) {
   case kClockAnimationHour:
     return kClockHourAnimationMs / 1000;
-  case kClockAnimationFiveMinute:
-    return kClockFiveMinuteAnimationMs / 1000;
   case kClockAnimationMinute:
     return kClockMinuteAnimationMs / 1000;
   default:
@@ -91,8 +88,6 @@ uint16_t clockDurationMillisFor(ClockAnimationKind kind) {
   switch (kind) {
   case kClockAnimationHour:
     return kClockHourAnimationMs;
-  case kClockAnimationFiveMinute:
-    return kClockFiveMinuteAnimationMs;
   case kClockAnimationMinute:
     return kClockMinuteAnimationMs;
   default:
@@ -104,10 +99,10 @@ ClockAnimationKind clockKindForEvent(const struct tm &local) {
   if (local.tm_min == 0) {
     return kClockAnimationHour;
   }
-  if ((local.tm_min % 5) == 0) {
-    return kClockAnimationFiveMinute;
+  if ((local.tm_min % kClockMinuteScheduleInterval) == 0) {
+    return kClockAnimationMinute;
   }
-  return kClockAnimationMinute;
+  return kClockAnimationNone;
 }
 
 bool clockReadLocal(struct tm &local, time_t &epoch) {
@@ -147,8 +142,6 @@ ClockAnimationKind clockKindForRequest(uint8_t request) {
   switch (request) {
   case kClockAnimationRequestMinute:
     return kClockAnimationMinute;
-  case kClockAnimationRequestFiveMinute:
-    return kClockAnimationFiveMinute;
   case kClockAnimationRequestHour:
     return kClockAnimationHour;
   default:
@@ -159,9 +152,8 @@ ClockAnimationKind clockKindForRequest(uint8_t request) {
 void clockAdvanceToDemoTarget(ClockAnimationKind kind, uint8_t &hour, uint8_t &minute) {
   uint16_t total = static_cast<uint16_t>(hour) * 60 + minute;
   if (kind == kClockAnimationMinute) {
-    total++;
-  } else if (kind == kClockAnimationFiveMinute) {
-    total += 5 - (total % 5);
+    uint8_t minuteOffset = kClockMinuteScheduleInterval - (total % kClockMinuteScheduleInterval);
+    total += minuteOffset;
   } else if (kind == kClockAnimationHour) {
     total += 60 - minute;
   }
@@ -453,10 +445,6 @@ bool clockFacePixel(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
     return clockDigitalPixel(hour, minute, x, y, hsv);
   }
 
-  if (kind == kClockAnimationFiveMinute) {
-    return clockAnalogPixel(hour, minute, x, y, hsv);
-  }
-
   if (kind == kClockAnimationHour) {
     return clockAnalogPixel(hour, minute, x, y, hsv);
   }
@@ -504,8 +492,6 @@ uint8_t clockRevealWeight(ClockAnimationKind kind, uint8_t x, uint8_t y, uint8_t
 
   if (kind == kClockAnimationMinute) {
     order = clockClamp8((static_cast<uint16_t>(x) * 210) / panelWidth + (hash & 31));
-  } else if (kind == kClockAnimationFiveMinute) {
-    order = clockClamp8((dist * 210) / maxDist + (hash & 31));
   } else {
     order = clockClamp8(44 + (dist * 168) / maxDist + (hash & 31));
   }
@@ -536,9 +522,6 @@ uint8_t clockTransitionGlow(ClockAnimationKind kind, uint8_t x, uint8_t y, uint8
     front = (static_cast<uint16_t>(progress) * panelWidth) / 255;
     pos = x;
     width = panelWidth / 12 + 2;
-  } else if (kind == kClockAnimationFiveMinute) {
-    front = (static_cast<uint16_t>(progress) * maxDist) / 255;
-    pos = dist;
   } else {
     front = (static_cast<uint16_t>(255 - progress) * maxDist) / 255;
     pos = dist;
@@ -583,7 +566,6 @@ uint16_t approachColor565(uint16_t current, uint16_t target, uint8_t step) {
 
 uint8_t clockColorStep(ClockAnimationKind kind) {
   if (kind == kClockAnimationMinute) return 80;
-  if (kind == kClockAnimationFiveMinute) return 38;
   return 30;
 }
 
