@@ -14,11 +14,11 @@ int main() {
 
   // Defaults match the firmware's historical constexpr values.
   CHECK(d.lifeStepMs == 100, "default lifeStepMs");
-  CHECK(d.burnStepMs == 29, "default burnStepMs");
   CHECK(d.renderFrameMs == 33, "default renderFrameMs");
   CHECK(d.minLiveCells == 8, "default minLiveCells");
   CHECK(d.hueStep == 3, "default hueStep");
-  CHECK(d.knockImpulseFullScale == 18000, "default knockImpulseFullScale");
+  CHECK(d.accelPollMs == 35, "default accelPollMs");
+  CHECK(d.motionGlowFadeStep == 3, "default motionGlowFadeStep");
 
   // Defaults are already in-range: clamping is a no-op.
   LifeSettings c = d;

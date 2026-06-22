@@ -650,7 +650,6 @@ void commitClockFaceToLife() {
         visualValue[index] = 0;
         drawnColor[index] = 0;
       }
-      burnHeat[index] = 0;
       forceRedraw[index] = true;
     }
     currentRows[y] = cachedRow;

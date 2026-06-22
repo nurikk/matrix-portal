@@ -17,7 +17,7 @@ steady-state mean of the per-second profiler, in microseconds.
 
 1. **Bitwise simulation** (`src/life_bits.h`): neighbour counting via bit-parallel
    SWAR over the two-word `RowBits` rows instead of 8 bit-tests per cell.
-2. **Render skip**: settled black cells (dead, fully faded, no burn heat) are
+2. **Render skip**: settled black cells (dead, fully faded, not forced to redraw) are
    skipped before the per-cell colour work in `renderFrame`. Output-identical --
    those cells never produced a `drawPixel`.
 
@@ -64,7 +64,7 @@ Measured from the normal firmware with added profiler output:
 Example profiler line:
 
 ```text
-Life FPS: 46 | Refresh FPS: 221 | live: 353 | changed: 279 | pixels: 680 | events: 5 | motion: 164 | knocks: 0 | burns: 0 | shakes: 0 | tilt: 255 | gen: 584 | avg us loop/step/sim/render/show/accel: 21507/20276/10609/6355/3311/1230 | max us loop/life/render/show: 22992/20596/6488/3331
+Life FPS: 46 | Refresh FPS: 221 | live: 353 | changed: 279 | pixels: 680 | events: 5 | motion: 164 | knocks: 0 | shakes: 0 | tilt: 255 | gen: 584 | avg us loop/step/sim/render/show/accel: 21507/20276/10609/6355/3311/1230 | max us loop/life/render/show: 22992/20596/6488/3331
 ```
 
 ## 128x128 Synthetic Benchmark Results
@@ -126,7 +126,7 @@ Benchmark 128x128 @ 5 bit | app FPS: 90 | Refresh FPS: 39 | avg us draw/show/loo
 Example output:
 
 ```text
-Life UPS: 8 | Render FPS: 27 | Refresh FPS: 82 | live: 568 | changed: 108 | pixels: 255 | events: 3 | motion: 0 | knocks: 0 | burns: 0 | shakes: 0 | tilt: 231 | gen: 79 | avg us loop/life/render/show/accel: 7024/26506/15579/6200/440 | max us loop/life/render/show: 48542/26642/15781/6250
+Life UPS: 8 | Render FPS: 27 | Refresh FPS: 82 | live: 568 | changed: 108 | pixels: 255 | events: 3 | motion: 0 | knocks: 0 | shakes: 0 | tilt: 231 | gen: 79 | avg us loop/life/render/show/accel: 7024/26506/15579/6200/440 | max us loop/life/render/show: 48542/26642/15781/6250
 ```
 
 ### MatrixPortal M4, 128x128, 3-bit Color

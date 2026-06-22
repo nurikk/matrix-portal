@@ -14,9 +14,6 @@ constexpr uint16_t kCellCount = kMaxWidth * kMaxHeight;
 constexpr uint8_t kTypeCount = 6;
 constexpr uint8_t kAccelAddressHigh = 0x19;
 constexpr uint8_t kAccelAddressLow = 0x18;
-constexpr uint8_t kClickAxisX = 0x01;
-constexpr uint8_t kClickAxisY = 0x02;
-constexpr uint8_t kClickSignNegative = 0x08;
 constexpr uint8_t kClickEventMask = 0x30;
 constexpr uint8_t kClickDouble = 0x20;
 
@@ -26,7 +23,6 @@ LifeSettings gDefaults = defaultLifeSettings();   // non-const: external linkage
 
 #if WIFI_PORTAL_ENABLED
 volatile bool gReqReseed = false;
-volatile bool gReqBurn = false;
 volatile bool gReqForget = false;
 volatile bool gPaused = false;     // sim freeze state — written ONLY on core 1 (loop + clearBoard)
 volatile int8_t gReqPause = 0;     // core-0 Stop/Resume request: +1 pause, -1 resume; applied on core 1
@@ -77,7 +73,6 @@ uint8_t visualHue[kCellCount];
 uint8_t visualSat[kCellCount];
 uint8_t visualValue[kCellCount];
 uint16_t drawnColor[kCellCount];
-uint8_t burnHeat[kCellCount];
 bool forceRedraw[kCellCount];
 uint16_t liveCells;
 uint16_t changedCells;
@@ -89,24 +84,12 @@ uint32_t framesThisPeriod;
 uint16_t lifeStepsThisPeriod;
 uint16_t randomEventsThisPeriod;
 bool accelerometerReady;
-bool accelerometerPrimed;
-int16_t lastAccelX;
-int16_t lastAccelY;
 uint8_t motionGlow;
-uint8_t pendingKnocks;
-bool burnWaveActive;
-uint8_t burnRadius;
-uint8_t burnEndRadius;
-uint8_t burnCenterX;
-uint8_t burnCenterY;
-uint8_t pendingBurnCenterX;
-uint8_t pendingBurnCenterY;
 uint32_t lastAccelReadAt;
 uint32_t lastKnockAt;
 uint32_t lastSimulationStepAt;
 uint32_t lastRenderAt;
 uint16_t knockEventsThisPeriod;
-uint16_t burnEventsThisPeriod;
 uint32_t profileLoopMicros;
 uint32_t profileLifeMicros;
 uint32_t profileAccelMicros;

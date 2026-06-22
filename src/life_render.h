@@ -4,13 +4,6 @@
 // Not a standalone TU.
 
 Hsv targetColorFor(uint16_t index, uint8_t x, uint8_t y, bool alive) {
-  if (burnHeat[index]) {
-    uint8_t heat = burnHeat[index];
-    uint8_t hue = heat > 190 ? 10 : wrapHue(4 + (190 - heat) / 4);
-    uint8_t saturation = heat > 225 ? 55 : 245;
-    return {hue, saturation, heat};
-  }
-
   if (!alive) {
     return {visualHue[index], 0, 0};
   }
@@ -48,10 +41,9 @@ void renderFrame() {
       uint16_t index = baseIndex + x;
       bool alive = row & bitForX[x];
 
-      // Settled black cells (dead, fully faded, no heat, not forced) are
+      // Settled black cells (dead, fully faded, not forced) are
       // already correct and unchanging -- skip the per-cell colour work.
-      if (!alive && visualValue[index] == 0 && burnHeat[index] == 0 &&
-          !forceRedraw[index]) {
+      if (!alive && visualValue[index] == 0 && !forceRedraw[index]) {
         continue;
       }
 
@@ -67,8 +59,7 @@ void renderFrame() {
       } else {
         nextHueValue = approachHue(visualHue[index], target.h, gLive.hueStep);
         nextSatValue = approach(visualSat[index], target.s, gLive.satStep);
-        uint8_t valueStep = burnHeat[index] ? gLive.liveValueStep
-                                            : (alive ? gLive.liveValueStep : gLive.deathValueStep);
+        uint8_t valueStep = alive ? gLive.liveValueStep : gLive.deathValueStep;
         nextValue = approach(visualValue[index], target.v, valueStep);
       }
 

@@ -35,26 +35,12 @@ uint8_t addSaturated(uint8_t a, uint8_t b) {
   return sum > 255 ? 255 : sum;
 }
 
-uint16_t abs16(int16_t value) {
-  return value < 0 ? -value : value;
-}
-
 uint16_t absDiff16(int16_t a, int16_t b) {
   int32_t delta = static_cast<int32_t>(a) - b;
   if (delta < 0) {
     delta = -delta;
   }
   return delta > 65535 ? 65535 : delta;
-}
-
-int16_t clamp16(int16_t value, int16_t low, int16_t high) {
-  if (value < low) {
-    return low;
-  }
-  if (value > high) {
-    return high;
-  }
-  return value;
 }
 
 void raiseMotionGlow(uint8_t amount) {

@@ -56,8 +56,6 @@ void reportFps() {
   Serial.print(randomEventsThisPeriod);
   Serial.print(" | knocks: ");
   Serial.print(knockEventsThisPeriod);
-  Serial.print(" | burns: ");
-  Serial.print(burnEventsThisPeriod);
   Serial.print(" | gen: ");
   Serial.print(generation);
   Serial.print(" | avg us loop/life/render/show/accel: ");
@@ -88,6 +86,5 @@ void reportFps() {
   lifeStepsThisPeriod = 0;
   randomEventsThisPeriod = 0;
   knockEventsThisPeriod = 0;
-  burnEventsThisPeriod = 0;
   resetProfileCounters();
 }

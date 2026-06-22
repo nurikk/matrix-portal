@@ -76,7 +76,6 @@ Adafruit_LIS3DH accelerometer = Adafruit_LIS3DH();
 #include "life_color.h"
 #include "life_render.h"
 #include "life_clock.h"
-#include "life_burn.h"
 #include "life_input.h"
 #include "life_spawn.h"
 #include "life_sim.h"
@@ -112,7 +111,6 @@ void setup() {
   lifeStepsThisPeriod = 0;
   randomEventsThisPeriod = 0;
   knockEventsThisPeriod = 0;
-  burnEventsThisPeriod = 0;
   matrix.getFrameCount();
 
   Serial.print("Game of Life: ");
@@ -146,7 +144,6 @@ void loop() {
     lastRenderAt = lastSimulationStepAt;
   }
   if (gReqReseed) { gReqReseed = false; seedLife(); }
-  if (gReqBurn)   { gReqBurn = false; gPaused = false; startBurnWave(); }   // burn implies "go": un-pause so the wave animates and reseeds
   if (gReqClear)  { gReqClear = false; clearBoard(); }                     // clearBoard() pauses so the empty board persists
   if (gReqPause)  { gPaused = (gReqPause > 0); gReqPause = 0; }             // explicit Stop/Resume; overrides clear's implicit pause
   if (gReqForget) { gReqForget = false; WiFi.disconnect(true, true); delay(200); ESP.restart(); }  // blocks ~200ms intentionally — device reboots immediately after
@@ -166,8 +163,7 @@ void loop() {
 #endif
   clockJustStarted = updateClockAnimation(now) || clockJustStarted;
   bool clockActive = clockAnimationActive();
-  uint16_t simulationInterval = burnWaveActive ? gLive.burnStepMs : gLive.lifeStepMs;
-  bool runSimulation = pendingKnocks || now - lastSimulationStepAt >= simulationInterval;
+  bool runSimulation = now - lastSimulationStepAt >= gLive.lifeStepMs;
 #if WIFI_PORTAL_ENABLED
   if (gPaused) runSimulation = false;   // Stop / Clear all from the web portal freezes the sim
 #endif

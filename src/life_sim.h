@@ -9,8 +9,6 @@ void configureLifeBounds() {
   panelWidth = width < kMaxWidth ? width : kMaxWidth;
   panelHeight = height < kMaxHeight ? height : kMaxHeight;
   activeMask = activeMaskFor(panelWidth);
-  burnCenterX = pendingBurnCenterX = panelWidth / 2;
-  burnCenterY = pendingBurnCenterY = panelHeight / 2;
 
   for (uint8_t x = 0; x < panelWidth; x++) {
     uint8_t bitX = x & 63;
@@ -101,14 +99,11 @@ void clearBoard() {
   }
   for (uint16_t i = 0; i < kCellCount; i++) {
     cellAge[i] = 0;
-    burnHeat[i] = 0;
     visualHue[i] = 0;
     visualSat[i] = 0;
     visualValue[i] = 0;
     forceRedraw[i] = true;   // force renderFrame to repaint each cell black this frame
   }
-  burnWaveActive = false;
-  pendingKnocks = 0;
   liveCells = 0;
   changedCells = 0;
   generation = 0;
@@ -201,15 +196,6 @@ void commitNextGeneration() {
 
 void stepLife() {
   lifeStepsThisPeriod++;
-
-  if (pendingKnocks) {
-    startBurnWave();
-  }
-
-  if (burnWaveActive) {
-    stepBurnWave();
-    return;
-  }
 
   uint16_t nextLiveCells = 0;
   uint16_t nextChangedCells = 0;

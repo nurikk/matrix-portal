@@ -14,7 +14,6 @@
 
 #define LIFE_SETTINGS_FIELDS(X)                                                                                                                                  \
   X(uint16_t, lifeStepMs,              "Life step (ms)",     "Simulation",    100,   10,  1000,   5, "Milliseconds between Game of Life generations. Lower = faster evolution.") \
-  X(uint16_t, burnStepMs,              "Burn step (ms)",     "Simulation",     29,    5,   200,   1, "Milliseconds per frame of the knock-triggered burn wave. Lower = faster burn.") \
   X(uint16_t, renderFrameMs,           "Render frame (ms)",  "Simulation",     33,   10,   200,   1, "Minimum milliseconds between LED redraws. Lower = higher frame rate, more CPU.") \
   X(uint16_t, minLiveCells,            "Min live cells",     "Simulation",      8,    0,   200,   1, "When live cells fall below this, fresh life is injected so the board never dies out.") \
   X(uint8_t,  disableReseed,           "Classic Conway",     "Simulation",      0,    0,     1,   1, "Classic Game of Life: evolve untouched and let it die out -- no density throttling, no random spawns, no min-live reseed.") \
@@ -27,11 +26,7 @@
   X(uint8_t,  largeChunkMass,          "Large chunk mass",   "Density",        12,    1,    48,   1, "Local cluster mass above which births slow more, throttling large blobs.") \
   X(uint8_t,  hugeChunkMass,           "Huge chunk mass",    "Density",        18,    1,    64,   1, "Local cluster mass above which births are throttled most, curbing runaway dense regions.") \
   X(uint8_t,  accelPollMs,             "Accel poll (ms)",    "Accelerometer",  35,    5,   200,   1, "Milliseconds between accelerometer reads. Lower = more responsive knock detection.") \
-  X(uint8_t,  burnRingWidth,           "Burn ring width",    "Burn wave",       2,    1,    16,   1, "Thickness in pixels of the expanding burn-wave ring.") \
-  X(uint8_t,  burnFadeStep,            "Burn fade step",     "Burn wave",      18,    1,    64,   1, "How fast scorched cells cool and fade after the burn passes. Higher = quicker recovery.") \
-  X(uint8_t,  motionGlowFadeStep,      "Motion glow fade",   "Burn wave",       3,    1,    32,   1, "How fast the motion-reaction glow fades out. Higher = shorter-lived glow.") \
-  X(int16_t,  knockAxisMinimumImpulse, "Knock min impulse",  "Knock",        6000,    0, 32000, 100, "Smallest knock impulse per axis that counts as a tap. Higher = ignores gentle taps.") \
-  X(int16_t,  knockImpulseFullScale,   "Knock full scale",   "Knock",       18000, 1000, 32000, 100, "Knock impulse mapped to a maximum-strength burst. Lower = small knocks feel stronger.")
+  X(uint8_t,  motionGlowFadeStep,      "Motion glow fade",   "Accelerometer",   3,    1,    32,   1, "How fast the tap glow fades after a knock. Higher = shorter-lived glow.")
 
 struct LifeSettings {
 #define X(type, name, label, group, def, lo, hi, step, desc) type name;
@@ -142,4 +137,3 @@ inline bool getLifeSettingByKey(const LifeSettings &s, const char *key, long *ou
 #undef X
   return false;
 }
-

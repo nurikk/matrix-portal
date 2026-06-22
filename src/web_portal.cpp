@@ -20,7 +20,6 @@ extern LifeSettings gLive;
 extern LifeSettings gSaved;
 extern LifeSettings gDefaults;
 extern volatile bool gReqReseed;
-extern volatile bool gReqBurn;
 extern volatile bool gReqForget;
 extern volatile int8_t gReqPause;
 extern volatile bool gReqClear;
@@ -56,7 +55,7 @@ volatile bool gShowIpScroll = false;
 char gIpText[32] = {0};
 
 namespace {
-constexpr uint16_t kSettingsVersion = 3;   // bumped: removed tilt/shake knobs (struct layout changed)
+constexpr uint16_t kSettingsVersion = 4;   // bumped: removed retired wave/knock-origin tuning (struct layout changed)
 constexpr const char *kNvsNamespace = "matrixlife";
 constexpr const char *kKeyVersion = "ver";
 constexpr const char *kKeyBlob = "settings";
@@ -560,7 +559,6 @@ bool dispatchWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t
   if (strcmp(type, "action") == 0) {
     const char *action = doc["action"] | "";
     if (strcmp(action, "reseed") == 0) { gReqReseed = true; return true; }
-    if (strcmp(action, "burn") == 0)   { gReqBurn = true;   return true; }
     if (strcmp(action, "stop") == 0)   { gReqPause = 1;     return true; }
     if (strcmp(action, "resume") == 0) { gReqPause = -1;    return true; }
     if (strcmp(action, "clear") == 0)  { gReqClear = true;  return true; }

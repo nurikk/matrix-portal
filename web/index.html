@@ -27,7 +27,6 @@
             --ink-faint: #626c81;
             --live: #34e39b;
             --live-soft: rgba(52, 227, 155, .14);
-            --ember: #ff6b3d;
             --danger: #ff4d67;
             --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
             --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -383,17 +382,6 @@
         .btn--go:hover {
             border-color: var(--live);
             background: rgba(52, 227, 155, .2)
-        }
-
-        .btn--ember {
-            color: var(--ember);
-            border-color: rgba(255, 107, 61, .4);
-            background: rgba(255, 107, 61, .1);
-        }
-
-        .btn--ember:hover {
-            border-color: var(--ember);
-            background: rgba(255, 107, 61, .18)
         }
 
         .btn--danger {
@@ -958,7 +946,7 @@
                 <button class="btn" id="playBtn" type="button">Pause</button>
                 <button class="btn" type="button" onclick="act('reseed')">Reseed</button>
                 <button class="btn" type="button" onclick="act('clear')">Clear</button>
-                <button class="btn btn--ember" type="button" onclick="act('burn')">Burn</button>
+                <button class="btn" type="button" onclick="act('clockMinute')">Time</button>
             </div>
 
             <div class="switches" id="switches">
@@ -1062,18 +1050,16 @@
         // Schema → build the tuning console
         // ============================================================
         // Render groups in a deliberate order; unknown groups fall in afterwards.
-        const GROUP_ORDER = ['Simulation', 'Color/fade', 'Density', 'Burn wave', 'Knock', 'Accelerometer'];
+        const GROUP_ORDER = ['Simulation', 'Color/fade', 'Density', 'Accelerometer'];
         const GROUP_TITLE = {
             'Simulation': 'Simulation', 'Color/fade': 'Color & fade', 'Density': 'Density throttle',
-            'Burn wave': 'Burn wave', 'Knock': 'Knock detection', 'Accelerometer': 'Accelerometer'
+            'Accelerometer': 'Accelerometer'
         };
         const GROUP_HINT = {
             'Simulation': 'Tempo and survival of the colony.',
             'Color/fade': 'How cells take on color and fade in and out.',
             'Density': 'Throttle births inside crowded clusters so blobs don’t run away.',
-            'Burn wave': 'The fire that sweeps the board when you knock the panel.',
-            'Knock': 'How hard a tap has to be to set off a burn.',
-            'Accelerometer': 'How often the motion sensor is read.'
+            'Accelerometer': 'Tap response and sensor read cadence.'
         };
         const OPEN_BY_DEFAULT = 2;   // first N groups start expanded
 
@@ -1224,7 +1210,7 @@
         // Live telemetry: readouts + the population sparkline (the signature)
         // ============================================================
         // The firmware reports the authoritative pause state in every stats frame (s.paused),
-        // so the toggle can't drift out of sync (reconnect, another tab, burn auto-resuming).
+        // so the toggle can't drift out of sync (reconnect, another tab, or clear-all pausing).
         // A click flips the label optimistically and holds off stats reconciliation briefly
         // (syncHoldUntil) so a stale in-flight frame from just before the command landed can't
         // flicker the button back.

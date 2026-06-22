@@ -18,8 +18,8 @@ to the board's onboard accelerometer.
 - **Dirty-pixel updates** — only pixels whose color actually changed are pushed to the
   panel.
 - **Accelerometer interaction** (onboard LIS3DH):
-  - **Knock / double-tap** triggers a radial **burn wave** that scorches the board and
-    reseeds it. (This is the only gyro-driven event.)
+  - **Knock / double-tap** triggers the digital minute clock animation on S3 Life builds.
+    (This is the only accelerometer-driven event.)
 - **Self-stabilizing** — injects gliders, bursts, and voids when the board stagnates or
   the live-cell count drops too low, then reseeds entirely if it dies out.
 - **Built-in benchmark mode** — a separate firmware path (`MATRIX_BENCHMARK`) that draws a
@@ -39,8 +39,8 @@ to the board's onboard accelerometer.
 HUB75 pin assignments for each board live at the top of [`src/main.cpp`](src/main.cpp)
 and come from Adafruit Protomatter's official examples.
 
-> **RAM note:** the per-cell visual state is ~14 bytes/cell, so a 128×128 board needs
-> ~224 KB just for cell arrays. That fits the S3 but **exceeds the M4's 192 KB** — the M4
+> **RAM note:** the per-cell visual state is ~13 bytes/cell, so a 128×128 board needs
+> ~208 KB just for cell arrays. That fits the S3 but **exceeds the M4's 192 KB** — the M4
 > can run the 128×128 *benchmark* but not the full 128×128 Life. See
 > [`benchmark.md`](benchmark.md) for the measurements behind this.
 
@@ -132,7 +132,8 @@ a slow or backgrounded client simply drops frames rather than backing up the dev
 **Live-preview + Save model:** every slider move applies the new value immediately so
 you can see the effect in real time. Changes are ephemeral until you press **Save**,
 which persists them to NVS. **Revert** restores the last saved values; **Reset**
-restores factory defaults. **Reseed** and **Trigger burn** are instant actions.
+restores factory defaults. **Reseed** and **Time** are instant actions; **Time** previews
+the digital minute clock animation.
 Hardware geometry (`MATRIX_WIDTH`, `MATRIX_BIT_DEPTH`, etc.) stays compile-time and is
 shown read-only in the panel.
 
