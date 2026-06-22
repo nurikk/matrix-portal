@@ -769,6 +769,51 @@
             gap: 9px;
         }
 
+        .device-actions.clock-actions {
+            grid-template-columns: 1fr;
+            margin-top: 4px;
+        }
+
+        .clock-grid {
+            display: grid;
+            gap: 9px;
+        }
+
+        .field-label {
+            font: 600 10px/1 var(--mono);
+            letter-spacing: .12em;
+            text-transform: uppercase;
+            color: var(--ink-faint);
+        }
+
+        .text {
+            width: 100%;
+            background: var(--void);
+            color: var(--ink);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 9px 10px;
+            font: 500 13px/1 var(--mono);
+        }
+
+        .text:focus-visible {
+            outline: 2px solid var(--live);
+            outline-offset: 1px;
+            border-color: var(--live);
+        }
+
+        .clock-grid.changed .text {
+            border-color: rgba(52, 227, 155, .42);
+        }
+
+        .checkline {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            color: var(--ink-dim);
+            font: 500 12px/1.35 var(--sans);
+        }
+
         .save {
             position: relative
         }
@@ -938,6 +983,19 @@
 
                 <div class="hr"></div>
 
+                <p class="panel-label">Clock <span class="hint" id="clockState">syncing</span></p>
+                <div class="clock-grid" id="clockBox">
+                    <label class="field-label" for="tzInput">Timezone</label>
+                    <input class="text" id="tzInput" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="Europe/London">
+                    <label class="checkline"><input type="checkbox" id="tzAuto"> Auto-detect by IP on WiFi connect</label>
+                    <div class="device-actions clock-actions">
+                        <button class="btn" type="button" onclick="detectTimezone()">Detect now</button>
+                    </div>
+                    <p class="device-note" id="clockNote">Use an IANA timezone name, for example Europe/London or America/New_York.</p>
+                </div>
+
+                <div class="hr"></div>
+
                 <p class="panel-label">Device</p>
                 <dl class="spec-list" id="specList"></dl>
                 <button class="btn btn--danger" type="button" style="width:100%" onclick="forget()" aria-describedby="forgetNote">Forget WiFi</button>
@@ -968,7 +1026,12 @@
         // ============================================================
         function send(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
         const sendField = debounce((key, value) => send({ type: 'set', key, value }), 120);
+        const sendClock = debounce(() => {
+            const tz = $('tzInput').value.trim();
+            if (tz) send({ type: 'clock', timezone: tz, autoTimezone: $('tzAuto').checked });
+        }, 180);
         function act(action) { send({ type: 'action', action }); }
+        function detectTimezone() { act('detectTimezone'); }
         function forget() { if (confirm('Erase WiFi credentials and reboot into Bluetooth setup?')) act('forget'); }
 
         function setConn(state) {
@@ -1017,6 +1080,7 @@
                 ['Panel', `${data.geometry.width}×${data.geometry.height}`],
                 ['Bit depth', `${data.geometry.bitDepth}-bit`],
                 ['Tile', `${data.geometry.tile}`],
+                ['Timezone', data.clock ? data.clock.timezone : 'UTC'],
                 ['Address', location.host || 'matrixportal.local'],
             ];
             specRows.forEach(([k, v]) => { sl.append(el('dt', {}, k), el('dd', {}, v)); });
@@ -1060,7 +1124,32 @@
                     controls[key] = { kind: 'bool', read: () => cb.checked ? 1 : 0, setVal: v => cb.checked = !!v, knob: null };
                 }
             }
+            if (data.clock) buildClock(data.clock);
             refreshDirty();
+        }
+
+        function buildClock(c) {
+            const tz = $('tzInput'), auto = $('tzAuto'), box = $('clockBox');
+            tz.value = c.timezone || 'UTC';
+            auto.checked = !!c.autoTimezone;
+            savedVals.timezone = c.savedTimezone || c.timezone || 'UTC';
+            savedVals.autoTimezone = c.savedAutoTimezone ? 1 : 0;
+            controls.timezone = { kind: 'text', read: () => tz.value.trim(), setVal: v => tz.value = v || 'UTC', knob: box };
+            controls.autoTimezone = { kind: 'bool', read: () => auto.checked ? 1 : 0, setVal: v => auto.checked = !!v, knob: box };
+            tz.oninput = () => { auto.checked = false; sendClock(); refreshDirty(); };
+            tz.onchange = () => { sendClock(); refreshDirty(); };
+            auto.onchange = () => { sendClock(); if (auto.checked) detectTimezone(); refreshDirty(); };
+            updateClock(c);
+        }
+
+        function updateClock(c) {
+            if (!c) return;
+            if (c.localTime) $('clockState').textContent = c.localTime;
+            else $('clockState').textContent = c.status || (c.synced ? 'synced' : 'syncing');
+            const bits = ['Use an IANA timezone name, for example Europe/London or America/New_York.'];
+            if (c.detectedTimezone) bits.push(`Detected: ${c.detectedTimezone}.`);
+            if (c.posix) bits.push(`POSIX: ${c.posix}.`);
+            $('clockNote').textContent = bits.join(' ');
         }
 
         function buildKnob(f) {
@@ -1107,6 +1196,13 @@
             c.setVal(value); refreshDirty();
         }
 
+        function applyRemoteClock(m) {
+            if (controls.timezone && m.timezone) controls.timezone.setVal(m.timezone);
+            if (controls.autoTimezone && typeof m.autoTimezone === 'boolean') controls.autoTimezone.setVal(m.autoTimezone ? 1 : 0);
+            updateClock(m);
+            refreshDirty();
+        }
+
         // ============================================================
         // Live telemetry: readouts + the population sparkline (the signature)
         // ============================================================
@@ -1145,6 +1241,7 @@
                 $('vWsPct').textContent = saved > 0 ? `${saved}% smaller` : '';
                 $('link').title = `${s.frameBytes} B/frame vs ${raw} B raw — ${saved}% saved by ${enc}`;
             }
+            if (s.clock) updateClock(s.clock);
             pushPop(s.live);
             // Trust the firmware's authoritative pause flag, except in the brief window right
             // after a click (syncHoldUntil) where a stale in-flight frame could lie.
@@ -1371,6 +1468,7 @@
             if (m.type === 'schema') { if (m.clientId !== undefined) myClientId = m.clientId; buildSchema(m); }
             else if (m.type === 'stats') showStats(m);
             else if (m.type === 'set') { if (m.from !== myClientId) applyRemoteSet(m.key, m.value); }
+            else if (m.type === 'clock') { if (m.from !== myClientId) applyRemoteClock(m); }
         }
 
         function connect() {

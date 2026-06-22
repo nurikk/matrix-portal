@@ -136,6 +136,13 @@ restores factory defaults. **Reseed** and **Trigger burn** are instant actions.
 Hardware geometry (`MATRIX_WIDTH`, `MATRIX_BIT_DEPTH`, etc.) stays compile-time and is
 shown read-only in the panel.
 
+**Clock/timezone:** on WiFi connect, S3 Life builds start SNTP and can auto-detect the
+IANA timezone from the public IP address via `mmarkin/GeoIP` (ipapi.co). The firmware
+uses `micro-timezonedb` to convert that IANA name to the ESP32 POSIX `TZ` string, so
+DST-aware local time is available without a separate timezone API after detection. The
+timezone and auto-detect toggle are editable in the web panel's **Clock** section and
+persisted with **Save**.
+
 **Partition note:** `[env:matrixportal_s3]` uses `board_build.partitions = huge_app.csv`
 to accommodate BLE + WiFi + application code. The S3 binary occupies roughly 51% of the
 3 MB app partition.

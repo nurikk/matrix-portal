@@ -9,6 +9,11 @@
 #include <ESPmDNS.h>
 #include <ESPAsyncWebServer.h>   // brings in AsyncWebSocket
 #include <ArduinoJson.h>
+#include <GeoIP.h>
+#include <time.h>
+#include <timezonedb_lookup.h>
+#include <ctype.h>
+#include <stdint.h>
 #include "life_settings.h"
 
 extern LifeSettings gLive;
@@ -54,10 +59,140 @@ constexpr uint16_t kSettingsVersion = 3;   // bumped: removed tilt/shake knobs (
 constexpr const char *kNvsNamespace = "matrixlife";
 constexpr const char *kKeyVersion = "ver";
 constexpr const char *kKeyBlob = "settings";
+constexpr const char *kKeyClockTimezone = "clockTz";
+constexpr const char *kKeyClockAuto = "clockAuto";
 constexpr const char *kProvServiceName = "PROV_MatrixLife";
 constexpr const char *kProvPop = "matrixlife";   // proof-of-possession entered in the app
 constexpr const char *kMdnsHost = "matrixportal";
-Preferences gPrefs;
+constexpr size_t kTimezoneNameBytes = 40;
+constexpr const char *kDefaultTimezone = "UTC";
+constexpr const char *kNtpServer1 = "pool.ntp.org";
+constexpr const char *kNtpServer2 = "time.nist.gov";
+constexpr const char *kNtpServer3 = "time.google.com";
+
+struct ClockSettings {
+  char timezone[kTimezoneNameBytes];
+  uint8_t autoTimezone;
+};
+
+ClockSettings defaultClockSettings() {
+  ClockSettings s = {};
+  snprintf(s.timezone, sizeof(s.timezone), "%s", kDefaultTimezone);
+  s.autoTimezone = 1;
+  return s;
+}
+
+portMUX_TYPE gSettingsMux = portMUX_INITIALIZER_UNLOCKED;
+LifeSettings gPending;
+volatile bool gPendingDirty = false;
+ClockSettings gClockDefaults = defaultClockSettings();
+ClockSettings gClockSaved = defaultClockSettings();
+ClockSettings gClockLive = defaultClockSettings();
+ClockSettings gClockPending = defaultClockSettings();
+volatile bool gClockPendingDirty = false;
+char gDetectedTimezone[kTimezoneNameBytes] = "";
+char gClockStatus[48] = "clock not synced";
+char gClockPosix[64] = "UTC0";
+TaskHandle_t gClockDetectTask = nullptr;
+bool gNtpStarted = false;
+
+void broadcastSchema();
+void broadcastClock(const ClockSettings &s, const char *source);
+void clockRequestDetect(bool saveDetected);
+
+void copyString(char *dst, size_t cap, const char *src) {
+  if (!dst || cap == 0) return;
+  snprintf(dst, cap, "%s", src ? src : "");
+}
+
+bool lookupClockPosix(const char *timezone, const char **posix) {
+  if (!timezone || !*timezone) return false;
+  const char *found = lookup_posix_timezone_tz(timezone);
+  if (!found) {
+    char lookup[kTimezoneNameBytes];
+    copyString(lookup, sizeof(lookup), timezone);
+    for (size_t i = 0; lookup[i]; i++) {
+      if (lookup[i] == '_') lookup[i] = ' ';
+    }
+    found = lookup_posix_timezone_tz(lookup);
+  }
+  if (!found) return false;
+  if (posix) *posix = found;
+  return true;
+}
+
+bool normalizeClockTimezone(const char *in, char *out, size_t cap) {
+  if (!in || !out || cap == 0) return false;
+  while (*in && isspace((unsigned char)*in)) in++;
+  size_t len = strlen(in);
+  while (len > 0 && isspace((unsigned char)in[len - 1])) len--;
+  if (len == 0 || len >= cap) return false;
+
+  for (size_t i = 0; i < len; i++) {
+    char c = in[i];
+    if (c == ' ') c = '_';
+    if (!(isalnum((unsigned char)c) || c == '/' || c == '_' || c == '-' || c == '+' || c == '.')) return false;
+    out[i] = c;
+  }
+  out[len] = '\0';
+  return lookupClockPosix(out, nullptr);
+}
+
+void setClockStatus(const char *status) {
+  taskENTER_CRITICAL(&gSettingsMux);
+  copyString(gClockStatus, sizeof(gClockStatus), status);
+  taskEXIT_CRITICAL(&gSettingsMux);
+}
+
+void clockApplyTimezone(const char *timezone) {
+  const char *posix = nullptr;
+  if (!lookupClockPosix(timezone, &posix)) {
+    timezone = kDefaultTimezone;
+    posix = "UTC0";
+    setClockStatus("unknown timezone; using UTC");
+  } else {
+    setClockStatus(gNtpStarted ? "clock syncing" : "timezone ready");
+  }
+
+  setenv("TZ", posix, 1);
+  tzset();
+  taskENTER_CRITICAL(&gSettingsMux);
+  copyString(gClockPosix, sizeof(gClockPosix), posix);
+  taskEXIT_CRITICAL(&gSettingsMux);
+}
+
+void clockStartNtp() {
+  configTime(0, 0, kNtpServer1, kNtpServer2, kNtpServer3);
+  gNtpStarted = true;
+  setClockStatus("clock syncing");
+}
+
+bool clockReadLocal(char *out, size_t cap) {
+  time_t now = time(nullptr);
+  if (now < 1609459200) return false;   // before 2021 means SNTP has not set wall time yet
+  struct tm local;
+  localtime_r(&now, &local);
+  return strftime(out, cap, "%Y-%m-%d %H:%M:%S", &local) > 0;
+}
+
+void clockSaveToNvs(const ClockSettings &s) {
+  Preferences prefs;
+  if (prefs.begin(kNvsNamespace, /*readOnly=*/false)) {
+    prefs.putString(kKeyClockTimezone, s.timezone);
+    prefs.putBool(kKeyClockAuto, s.autoTimezone != 0);
+    prefs.end();
+    taskENTER_CRITICAL(&gSettingsMux);
+    gClockSaved = s;
+    taskEXIT_CRITICAL(&gSettingsMux);
+  }
+}
+
+void publishClockPending(const ClockSettings &s) {
+  taskENTER_CRITICAL(&gSettingsMux);
+  gClockPending = s;
+  gClockPendingDirty = true;
+  taskEXIT_CRITICAL(&gSettingsMux);
+}
 
 void onWiFiEvent(arduino_event_t *e) {
   switch (e->event_id) {
@@ -73,6 +208,8 @@ void onWiFiEvent(arduino_event_t *e) {
       }
       gShowIpScroll = true;       // main loop scrolls it once
       webServerStart();           // forward-declared above; defined below
+      clockStartNtp();
+      if (gClockSaved.autoTimezone) clockRequestDetect(/*saveDetected=*/true);
       break;
     }
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
@@ -86,33 +223,49 @@ void onWiFiEvent(arduino_event_t *e) {
 
 void settingsLoadFromNvs() {
   gSaved = defaultLifeSettings();
-  if (gPrefs.begin(kNvsNamespace, /*readOnly=*/true)) {
+  gClockSaved = gClockDefaults;
+
+  Preferences prefs;
+  if (prefs.begin(kNvsNamespace, /*readOnly=*/true)) {
     LifeSettings tmp;
-    uint16_t ver = gPrefs.getUShort(kKeyVersion, 0);
-    size_t got = gPrefs.getBytesLength(kKeyBlob);
+    uint16_t ver = prefs.getUShort(kKeyVersion, 0);
+    size_t got = prefs.getBytesLength(kKeyBlob);
     if (ver == kSettingsVersion && got == sizeof(LifeSettings)) {
-      gPrefs.getBytes(kKeyBlob, &tmp, sizeof(LifeSettings));
+      prefs.getBytes(kKeyBlob, &tmp, sizeof(LifeSettings));
       clampSettings(tmp);
       gSaved = tmp;
     }
-    gPrefs.end();
+
+    String tz = prefs.getString(kKeyClockTimezone, "");
+    char normalized[kTimezoneNameBytes];
+    if (normalizeClockTimezone(tz.c_str(), normalized, sizeof(normalized))) {
+      copyString(gClockSaved.timezone, sizeof(gClockSaved.timezone), normalized);
+    }
+    gClockSaved.autoTimezone = prefs.getBool(kKeyClockAuto, true) ? 1 : 0;
+    prefs.end();
   }
   gLive = gSaved;
+  gClockLive = gClockSaved;
+  gClockPending = gClockLive;
+  gClockPendingDirty = false;
+  clockApplyTimezone(gClockLive.timezone);
 }
 
 void settingsSaveToNvs(const LifeSettings &s) {
-  if (gPrefs.begin(kNvsNamespace, /*readOnly=*/false)) {
-    gPrefs.putUShort(kKeyVersion, kSettingsVersion);
-    gPrefs.putBytes(kKeyBlob, &s, sizeof(LifeSettings));
-    gPrefs.end();
+  Preferences prefs;
+  if (prefs.begin(kNvsNamespace, /*readOnly=*/false)) {
+    prefs.putUShort(kKeyVersion, kSettingsVersion);
+    prefs.putBytes(kKeyBlob, &s, sizeof(LifeSettings));
+    prefs.end();
     gSaved = s;
   }
 }
 
 void settingsClearNvs() {
-  if (gPrefs.begin(kNvsNamespace, /*readOnly=*/false)) {
-    gPrefs.clear();
-    gPrefs.end();
+  Preferences prefs;
+  if (prefs.begin(kNvsNamespace, /*readOnly=*/false)) {
+    prefs.clear();
+    prefs.end();
   }
 }
 
@@ -128,10 +281,6 @@ void webPortalBegin() {
 }
 
 namespace {
-portMUX_TYPE gSettingsMux = portMUX_INITIALIZER_UNLOCKED;
-LifeSettings gPending;
-volatile bool gPendingDirty = false;
-
 AsyncWebServer gServer(80);
 AsyncWebSocket gWs("/ws");
 TaskHandle_t gPushTask = nullptr;
@@ -179,8 +328,18 @@ volatile bool gReqDraw = false;
 // Caller must NOT hold gSettingsMux.
 void buildSchemaDoc(JsonDocument &doc) {
   LifeSettings pend;
+  ClockSettings clockPend;
+  ClockSettings clockSaved;
+  char detected[kTimezoneNameBytes];
+  char status[sizeof(gClockStatus)];
+  char posix[sizeof(gClockPosix)];
   taskENTER_CRITICAL(&gSettingsMux);
   pend = gPending;
+  clockPend = gClockPending;
+  clockSaved = gClockSaved;
+  copyString(detected, sizeof(detected), gDetectedTimezone);
+  copyString(status, sizeof(status), gClockStatus);
+  copyString(posix, sizeof(posix), gClockPosix);
   taskEXIT_CRITICAL(&gSettingsMux);
 
   doc["type"] = "schema";
@@ -204,6 +363,21 @@ void buildSchemaDoc(JsonDocument &doc) {
     f["default"] = getLifeSettingByIndex(gDefaults, i);
     f["desc"] = kLifeFieldMeta[i].desc;
   }
+
+  char localTime[32];
+  bool synced = clockReadLocal(localTime, sizeof(localTime));
+  JsonObject clock = doc["clock"].to<JsonObject>();
+  clock["timezone"] = clockPend.timezone;
+  clock["autoTimezone"] = clockPend.autoTimezone != 0;
+  clock["savedTimezone"] = clockSaved.timezone;
+  clock["savedAutoTimezone"] = clockSaved.autoTimezone != 0;
+  clock["defaultTimezone"] = gClockDefaults.timezone;
+  clock["defaultAutoTimezone"] = gClockDefaults.autoTimezone != 0;
+  clock["detectedTimezone"] = detected;
+  clock["status"] = synced ? "synced" : status;
+  clock["posix"] = posix;
+  clock["synced"] = synced;
+  if (synced) clock["localTime"] = localTime;
 }
 
 // Stats are read cross-core (core 1 writes, this runs on core 0) WITHOUT a lock. This is a
@@ -221,6 +395,22 @@ void buildStatsDoc(JsonDocument &doc) {
   doc["frameBytes"] = (unsigned long)gLastFrameBytes;
   doc["rawFrameBytes"] = (unsigned long)gRawFrameBytes;
   doc["frameEncoding"] = gLastFrameWasRle ? "rle" : "raw";
+
+  ClockSettings clockPend;
+  char status[sizeof(gClockStatus)];
+  taskENTER_CRITICAL(&gSettingsMux);
+  clockPend = gClockPending;
+  copyString(status, sizeof(status), gClockStatus);
+  taskEXIT_CRITICAL(&gSettingsMux);
+
+  char localTime[32];
+  bool synced = clockReadLocal(localTime, sizeof(localTime));
+  JsonObject clock = doc["clock"].to<JsonObject>();
+  clock["timezone"] = clockPend.timezone;
+  clock["autoTimezone"] = clockPend.autoTimezone != 0;
+  clock["synced"] = synced;
+  clock["status"] = synced ? "synced" : status;
+  if (synced) clock["localTime"] = localTime;
 }
 
 void publishPending(const LifeSettings &s) {
@@ -237,6 +427,71 @@ void broadcastSchema() {
   String out;
   serializeJson(doc, out);
   gWs.textAll(out);
+}
+
+void writeClockMessage(JsonDocument &doc, const ClockSettings &s, const char *source) {
+  doc["type"] = "clock";
+  doc["timezone"] = s.timezone;
+  doc["autoTimezone"] = s.autoTimezone != 0;
+  if (source) doc["source"] = source;
+}
+
+void broadcastClock(const ClockSettings &s, const char *source) {
+  JsonDocument doc;
+  writeClockMessage(doc, s, source);
+  String out;
+  serializeJson(doc, out);
+  gWs.textAll(out);
+}
+
+void clockDetectTask(void *param) {
+  bool saveDetected = ((uintptr_t)param) != 0;
+  GeoIP geoip;
+  location_t loc = geoip.getGeoFromWiFi(false);
+  ClockSettings work;
+  ClockSettings saved;
+  char detected[kTimezoneNameBytes];
+  bool ok = loc.status && normalizeClockTimezone(loc.timezone, detected, sizeof(detected));
+
+  if (ok) {
+    taskENTER_CRITICAL(&gSettingsMux);
+    copyString(gDetectedTimezone, sizeof(gDetectedTimezone), detected);
+    work = gClockPending;
+    saved = gClockSaved;
+    copyString(work.timezone, sizeof(work.timezone), detected);
+    work.autoTimezone = 1;
+    gClockPending = work;
+    gClockPendingDirty = true;
+    taskEXIT_CRITICAL(&gSettingsMux);
+
+    Serial.printf("[clock] timezone detected: %s\n", detected);
+    if (saveDetected) {
+      if (strcmp(saved.timezone, work.timezone) != 0 || saved.autoTimezone != work.autoTimezone) {
+        clockSaveToNvs(work);
+      }
+      broadcastSchema();
+    } else {
+      broadcastClock(work, "detect");
+    }
+  } else {
+    Serial.println("[clock] timezone detection failed");
+    setClockStatus("timezone detect failed");
+    broadcastSchema();
+  }
+
+  gClockDetectTask = nullptr;
+  vTaskDelete(nullptr);
+}
+
+void clockRequestDetect(bool saveDetected) {
+  if (gClockDetectTask) return;
+  BaseType_t created = xTaskCreatePinnedToCore(clockDetectTask, "tzdetect", 8192,
+                                               (void *)(uintptr_t)(saveDetected ? 1 : 0),
+                                               1, &gClockDetectTask, 0);
+  if (created != pdPASS) {
+    gClockDetectTask = nullptr;
+    setClockStatus("timezone detect unavailable");
+  }
 }
 
 // === Inbound message dispatcher — parse one JSON text frame and route it. ===
@@ -275,6 +530,32 @@ bool dispatchWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t
     return true;
   }
 
+  if (strcmp(type, "clock") == 0) {
+    ClockSettings work;
+    taskENTER_CRITICAL(&gSettingsMux);
+    work = gClockPending;
+    taskEXIT_CRITICAL(&gSettingsMux);
+
+    if (!doc["timezone"].isNull()) {
+      char normalized[kTimezoneNameBytes];
+      const char *timezone = doc["timezone"] | "";
+      if (!normalizeClockTimezone(timezone, normalized, sizeof(normalized))) return false;
+      copyString(work.timezone, sizeof(work.timezone), normalized);
+    }
+    if (!doc["autoTimezone"].isNull()) {
+      work.autoTimezone = (doc["autoTimezone"] | false) ? 1 : 0;
+    }
+
+    publishClockPending(work);
+    JsonDocument echo;
+    writeClockMessage(echo, work, "client");
+    echo["from"] = client->id();
+    String out;
+    serializeJson(echo, out);
+    gWs.textAll(out);
+    return true;
+  }
+
   if (strcmp(type, "action") == 0) {
     const char *action = doc["action"] | "";
     if (strcmp(action, "reseed") == 0) { gReqReseed = true; return true; }
@@ -283,17 +564,30 @@ bool dispatchWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t
     if (strcmp(action, "resume") == 0) { gReqPause = -1;    return true; }
     if (strcmp(action, "clear") == 0)  { gReqClear = true;  return true; }
     if (strcmp(action, "forget") == 0) { gReqForget = true; return true; }
+    if (strcmp(action, "detectTimezone") == 0) { clockRequestDetect(/*saveDetected=*/false); return true; }
     if (strcmp(action, "save") == 0) {
       LifeSettings cur;
+      ClockSettings clock;
       taskENTER_CRITICAL(&gSettingsMux);
       cur = gPending;
+      clock = gClockPending;
       taskEXIT_CRITICAL(&gSettingsMux);
       settingsSaveToNvs(cur);
+      clockSaveToNvs(clock);
       broadcastSchema();
       return true;
     }
-    if (strcmp(action, "revert") == 0) { publishPending(gSaved);    broadcastSchema(); return true; }
-    if (strcmp(action, "reset") == 0)  { publishPending(gDefaults); broadcastSchema(); return true; }
+    if (strcmp(action, "revert") == 0) {
+      ClockSettings clockSaved;
+      taskENTER_CRITICAL(&gSettingsMux);
+      clockSaved = gClockSaved;
+      taskEXIT_CRITICAL(&gSettingsMux);
+      publishPending(gSaved);
+      publishClockPending(clockSaved);
+      broadcastSchema();
+      return true;
+    }
+    if (strcmp(action, "reset") == 0)  { publishPending(gDefaults); publishClockPending(gClockDefaults); broadcastSchema(); return true; }
   }
   return false;
 }
@@ -441,6 +735,8 @@ void webServerStart() {
   taskENTER_CRITICAL(&gSettingsMux);
   gPending = gLive;        // first connect only: desired == current
   gPendingDirty = false;
+  gClockPending = gClockLive;
+  gClockPendingDirty = false;
   taskEXIT_CRITICAL(&gSettingsMux);
 
   gServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -461,6 +757,16 @@ void webPortalTick() {
     gPendingDirty = false;
     taskEXIT_CRITICAL(&gSettingsMux);
     gLive = next;          // the ONLY writer of gLive (core 1)
+  }
+
+  if (gClockPendingDirty) {
+    ClockSettings next;
+    taskENTER_CRITICAL(&gSettingsMux);
+    next = gClockPending;
+    gClockPendingDirty = false;
+    taskEXIT_CRITICAL(&gSettingsMux);
+    gClockLive = next;
+    clockApplyTimezone(gClockLive.timezone);
   }
 
   // Drain a staged browser-drawn frame: apply FIRST (read the buffer), then release it by
