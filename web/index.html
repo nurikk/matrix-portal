@@ -774,6 +774,18 @@
             margin-top: 4px;
         }
 
+        .clock-animation-actions {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 9px;
+        }
+
+        @media (max-width: 430px) {
+            .clock-animation-actions {
+                grid-template-columns: 1fr;
+            }
+        }
+
         .clock-grid {
             display: grid;
             gap: 9px;
@@ -990,6 +1002,12 @@
                     <label class="checkline"><input type="checkbox" id="tzAuto"> Auto-detect by IP on WiFi connect</label>
                     <div class="device-actions clock-actions">
                         <button class="btn" type="button" onclick="detectTimezone()">Detect now</button>
+                    </div>
+                    <label class="field-label">Preview animations</label>
+                    <div class="clock-animation-actions">
+                        <button class="btn" type="button" onclick="act('clockMinute')">Minute</button>
+                        <button class="btn" type="button" onclick="act('clockFive')">5 min</button>
+                        <button class="btn" type="button" onclick="act('clockHour')">Hour</button>
                     </div>
                     <p class="device-note" id="clockNote">Use an IANA timezone name, for example Europe/London or America/New_York.</p>
                 </div>

@@ -75,6 +75,7 @@ Adafruit_LIS3DH accelerometer = Adafruit_LIS3DH();
 #include "life_profile.h"
 #include "life_color.h"
 #include "life_render.h"
+#include "life_clock.h"
 #include "life_burn.h"
 #include "life_input.h"
 #include "life_spawn.h"
@@ -155,11 +156,22 @@ void loop() {
   pollAccelerometer();
   uint32_t lifeStartedAt = micros();
   uint32_t now = millis();
+  bool clockJustStarted = false;
+#if WIFI_PORTAL_ENABLED
+  if (gReqClockAnimation) {
+    uint8_t request = gReqClockAnimation;
+    gReqClockAnimation = 0;
+    clockJustStarted = startClockAnimationRequest(request, now);
+  }
+#endif
+  clockJustStarted = updateClockAnimation(now) || clockJustStarted;
+  bool clockActive = clockAnimationActive();
   uint16_t simulationInterval = burnWaveActive ? gLive.burnStepMs : gLive.lifeStepMs;
   bool runSimulation = pendingKnocks || now - lastSimulationStepAt >= simulationInterval;
 #if WIFI_PORTAL_ENABLED
   if (gPaused) runSimulation = false;   // Stop / Clear all from the web portal freezes the sim
 #endif
+  if (clockActive) runSimulation = false;  // freeze the current Life state while it morphs into the clock face
   bool rendered = false;
 
   if (runSimulation) {
@@ -169,8 +181,16 @@ void loop() {
 
   uint32_t lifeEndedAt = micros();
 
-  if (runSimulation || now - lastRenderAt >= gLive.renderFrameMs) {
-    renderFrame();
+  bool clockFinalDue = clockAnimationFinalFrameDue(now);
+  if (runSimulation || clockJustStarted || clockFinalDue || now - lastRenderAt >= gLive.renderFrameMs) {
+    if (clockActive) {
+      renderClockAnimationFrame(now);
+      if (finishClockAnimationAfterRender(now)) {
+        lastSimulationStepAt = now;   // release the clock face into Life without a catch-up step burst
+      }
+    } else {
+      renderFrame();
+    }
     lastRenderAt = now;
     decayMotionEffects();
     rendered = true;
