@@ -447,55 +447,242 @@ bool clockRingPixel(uint8_t x, uint8_t y, int16_t cx, int16_t cy,
   return delta <= band;
 }
 
+uint8_t clockAnalogRadius(uint16_t md) {
+  uint8_t radius = (md * 44) / 100;
+  return radius < 4 ? 4 : radius;
+}
+
+int16_t clockSin60(uint8_t tick) {
+  tick %= 60;
+  uint8_t base = tick / 5;
+  uint8_t frac = tick % 5;
+  int16_t a = kClockSin12[base];
+  int16_t b = kClockSin12[(base + 1) % 12];
+  return (a * (5 - frac) + b * frac) / 5;
+}
+
+int16_t clockCos60(uint8_t tick) {
+  tick %= 60;
+  uint8_t base = tick / 5;
+  uint8_t frac = tick % 5;
+  int16_t a = kClockCos12[base];
+  int16_t b = kClockCos12[(base + 1) % 12];
+  return (a * (5 - frac) + b * frac) / 5;
+}
+
+int16_t clockPointX(int16_t cx, uint8_t radius, uint8_t tick) {
+  return cx + (clockSin60(tick) * static_cast<int16_t>(radius)) / 127;
+}
+
+int16_t clockPointY(int16_t cy, uint8_t radius, uint8_t tick) {
+  return cy - (clockCos60(tick) * static_cast<int16_t>(radius)) / 127;
+}
+
+bool clockHourNumeralPixel(uint8_t hour, uint8_t x, uint8_t y, Hsv &hsv) {
+  uint16_t md = clockMinDimension();
+  uint8_t hour12 = hour % 12;
+  if (hour12 == 0) hour12 = 12;
+
+  uint8_t sx = md / 42 + 1;
+  uint8_t sy = sx + 1;
+  uint8_t digitCount = hour12 >= 10 ? 2 : 1;
+  uint8_t totalW = digitCount == 2 ? 7 * sx : 3 * sx;
+  uint8_t totalH = 5 * sy;
+  int16_t cx = (panelWidth - 1) / 2;
+  int16_t cy = (panelHeight - 1) / 2;
+  uint8_t radius = clockAnalogRadius(md);
+  int16_t ox = cx - totalW / 2;
+  int16_t oy = cy + radius / 6 - totalH / 2;
+
+  if (x < ox || y < oy || x >= ox + totalW || y >= oy + totalH) {
+    return false;
+  }
+
+  uint8_t col = (static_cast<int16_t>(x) - ox) / sx;
+  uint8_t row = (static_cast<int16_t>(y) - oy) / sy;
+  uint8_t digit = hour12;
+  if (digitCount == 2) {
+    if (col < 3) {
+      digit = hour12 / 10;
+    } else if (col >= 4 && col < 7) {
+      digit = hour12 % 10;
+      col -= 4;
+    } else {
+      return false;
+    }
+  }
+
+  if (!clockDigitPixel(digit, col, row)) {
+    return false;
+  }
+
+  hsv = {wrapHue(18 + hour12 * 9), 225, 250};
+  return true;
+}
+
 bool clockAnalogPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &hsv) {
   uint16_t md = clockMinDimension();
   int16_t cx = (panelWidth - 1) / 2;
   int16_t cy = (panelHeight - 1) / 2;
-  uint8_t radius = (md * 43) / 100;
-  uint8_t ringThickness = md / 48 + 2;
-  uint8_t handThickness = md / 40 + 1;
+  uint8_t radius = clockAnalogRadius(md);
+  uint8_t ringThickness = md / 64 + 1;
+  uint8_t handThickness = md / 52 + 1;
 
-  uint8_t minuteIndex = (minute / 5) % 12;
-  uint8_t hourIndex = (hour % 12 + (minute >= 30 ? 1 : 0)) % 12;
-  int16_t minuteX = cx + (static_cast<int16_t>(kClockSin12[minuteIndex]) * radius * 72) / (127 * 100);
-  int16_t minuteY = cy - (static_cast<int16_t>(kClockCos12[minuteIndex]) * radius * 72) / (127 * 100);
-  int16_t hourX = cx + (static_cast<int16_t>(kClockSin12[hourIndex]) * radius * 48) / (127 * 100);
-  int16_t hourY = cy - (static_cast<int16_t>(kClockCos12[hourIndex]) * radius * 48) / (127 * 100);
+  uint8_t minuteTick = minute % 60;
+  uint8_t hourTick = ((hour % 12) * 5 + minute / 12) % 60;
+  int16_t minuteX = clockPointX(cx, (radius * 74) / 100, minuteTick);
+  int16_t minuteY = clockPointY(cy, (radius * 74) / 100, minuteTick);
+  int16_t hourX = clockPointX(cx, (radius * 50) / 100, hourTick);
+  int16_t hourY = clockPointY(cy, (radius * 50) / 100, hourTick);
+
+  if (clockHourNumeralPixel(hour, x, y, hsv)) {
+    return true;
+  }
 
   if (clockNearLine(x, y, cx, cy, hourX, hourY, handThickness + 1)) {
-    hsv = {28, 220, 245};
+    hsv = {24, 230, 250};
     return true;
   }
   if (clockNearLine(x, y, cx, cy, minuteX, minuteY, handThickness)) {
-    hsv = {138, 210, 240};
+    hsv = {136, 220, 242};
     return true;
   }
   if (clockDiscPixel(x, y, cx, cy, md / 32 + 1)) {
-    hsv = {96, 150, 245};
+    hsv = {108, 120, 255};
     return true;
   }
 
   for (uint8_t i = 0; i < 12; i++) {
     bool major = (i % 3) == 0;
+    uint8_t tick = i * 5;
     uint8_t inner = radius - (major ? radius / 5 : radius / 9);
-    int16_t outerX = cx + (static_cast<int16_t>(kClockSin12[i]) * radius) / 127;
-    int16_t outerY = cy - (static_cast<int16_t>(kClockCos12[i]) * radius) / 127;
-    int16_t innerX = cx + (static_cast<int16_t>(kClockSin12[i]) * inner) / 127;
-    int16_t innerY = cy - (static_cast<int16_t>(kClockCos12[i]) * inner) / 127;
+    int16_t outerX = clockPointX(cx, radius, tick);
+    int16_t outerY = clockPointY(cy, radius, tick);
+    int16_t innerX = clockPointX(cx, inner, tick);
+    int16_t innerY = clockPointY(cy, inner, tick);
     if (clockNearLine(x, y, innerX, innerY, outerX, outerY,
                       major ? ringThickness + 1 : ringThickness)) {
-      hsv = {wrapHue(150 + i * 8), static_cast<uint8_t>(major ? 190 : 160),
-             static_cast<uint8_t>(major ? 215 : 170)};
+      hsv = {wrapHue(150 + i * 8), static_cast<uint8_t>(major ? 150 : 175),
+             static_cast<uint8_t>(major ? 235 : 175)};
       return true;
     }
   }
 
+  if (md >= 64) {
+    uint8_t dotRadius = md >= 96 ? 1 : 0;
+    for (uint8_t i = 0; i < 60; i++) {
+      if ((i % 5) == 0) continue;
+      uint8_t dotDistance = radius - ringThickness;
+      int16_t dotX = clockPointX(cx, dotDistance, i);
+      int16_t dotY = clockPointY(cy, dotDistance, i);
+      if (clockDiscPixel(x, y, dotX, dotY, dotRadius)) {
+        hsv = {168, 150, 105};
+        return true;
+      }
+    }
+  }
+
   if (clockRingPixel(x, y, cx, cy, radius, ringThickness)) {
-    hsv = {154, 190, 85};
+    hsv = {158, 180, 95};
+    return true;
+  }
+
+  uint8_t innerRadius = (radius * 72) / 100;
+  if (clockRingPixel(x, y, cx, cy, innerRadius, 1)) {
+    hsv = {188, 160, 55};
     return true;
   }
 
   return false;
+}
+
+struct ClockHourRenderState {
+  uint32_t elapsedMs;
+  uint16_t md;
+  int16_t cx;
+  int16_t cy;
+  uint8_t radius;
+  int16_t sweepX;
+  int16_t sweepY;
+};
+
+ClockHourRenderState clockHourRenderStateFor(uint32_t nowMs) {
+  uint32_t elapsedMs = nowMs - gClockAnimation.startedAt;
+  uint16_t md = clockMinDimension();
+  int16_t cx = (panelWidth - 1) / 2;
+  int16_t cy = (panelHeight - 1) / 2;
+  uint8_t radius = clockAnalogRadius(md);
+  uint8_t sweepTick = ((elapsedMs % kClockHourAnimationMs) * 60UL) / kClockHourAnimationMs;
+  uint8_t sweepRadius = (radius * 92) / 100;
+  return {elapsedMs, md, cx, cy, radius,
+          clockPointX(cx, sweepRadius, sweepTick),
+          clockPointY(cy, sweepRadius, sweepTick)};
+}
+
+uint8_t clockHourSweepValue(uint8_t x, uint8_t y, const ClockHourRenderState &state) {
+  if (clockDiscPixel(x, y, state.sweepX, state.sweepY, state.md / 42 + 1)) {
+    return 190;
+  }
+  if (clockNearLine(x, y, state.cx, state.cy, state.sweepX, state.sweepY,
+                    state.md / 74 + 1)) {
+    return 88;
+  }
+  return 0;
+}
+
+uint16_t clockHourAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
+                                bool targetPixel, uint8_t targetWeight,
+                                uint8_t easedProgress, const ClockHourRenderState &state) {
+  uint8_t sweep = clockHourSweepValue(x, y, state);
+
+  if (targetPixel) {
+    uint8_t hue = nextHue[index];
+    uint8_t sat = nextSat[index];
+    uint8_t value = nextType[index];
+    uint8_t shimmer = triWave6(state.elapsedMs / 48 + x * 2 + y * 3) * 2;
+
+    value = addSaturated(value, shimmer);
+    if (sweep) {
+      hue = wrapHue(4 + (sweep >> 3));
+      sat = 230;
+      value = addSaturated(value, sweep >> 1);
+    }
+
+    return hsv565(hue, sat, (static_cast<uint16_t>(value) * targetWeight) / 255);
+  }
+
+  uint8_t accent = sweep;
+  uint8_t hue = sweep ? 6 : 176;
+  if (clockRingPixel(x, y, state.cx, state.cy, state.radius + 1, state.md / 96 + 1)) {
+    uint8_t ring = 26 + triWave6(state.elapsedMs / 70 + x + y);
+    if (ring > accent) {
+      accent = ring;
+      hue = wrapHue(168 + state.elapsedMs / 64);
+    }
+  }
+  if (clockRingPixel(x, y, state.cx, state.cy, (state.radius * 72) / 100, 1)) {
+    uint8_t inner = 16 + triWave6(state.elapsedMs / 58 + x * 3);
+    if (inner > accent) {
+      accent = inner;
+      hue = 196;
+    }
+  }
+
+  uint16_t hash = clockPixelHash(x, y, gClockAnimation.eventMinuteId ^ 0xA5A5A5A5UL);
+  if ((hash & 0xFF) == ((state.elapsedMs / 45) & 0xFF)) {
+    uint8_t spark = 38 + triWave6((state.elapsedMs / 18 + (hash >> 8)) & 63);
+    if (spark > accent) {
+      accent = spark;
+      hue = wrapHue(32 + (hash >> 5));
+    }
+  }
+
+  if (accent == 0) {
+    return 0;
+  }
+
+  accent = (static_cast<uint16_t>(accent) * easedProgress) / 255;
+  return hsv565(hue, sweep ? 225 : 185, accent);
 }
 
 bool clockFacePixel(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
@@ -552,7 +739,7 @@ uint8_t clockRevealWeight(ClockAnimationKind kind, uint8_t x, uint8_t y, uint8_t
   if (kind == kClockAnimationMinute) {
     order = clockClamp8((static_cast<uint16_t>(x) * 210) / panelWidth + (hash & 31));
   } else {
-    order = clockClamp8(44 + (dist * 168) / maxDist + (hash & 31));
+    order = clockClamp8(18 + (dist * 154) / maxDist + (hash & 23));
   }
 
   if (progress <= order) {
@@ -578,7 +765,7 @@ uint16_t approachColor565(uint16_t current, uint16_t target, uint8_t step) {
 
 uint8_t clockColorStep(ClockAnimationKind kind) {
   if (kind == kClockAnimationMinute) return 80;
-  return 30;
+  return 48;
 }
 
 void renderClockAnimationFrame(uint32_t nowMs) {
@@ -586,6 +773,7 @@ void renderClockAnimationFrame(uint32_t nowMs) {
   updatedPixels = 0;
   uint8_t progress = clockAnimationProgress(nowMs);
   uint8_t eased = clockSmoothstep8(progress);
+  ClockHourRenderState hourState = clockHourRenderStateFor(nowMs);
 
   for (uint8_t y = 0; y < panelHeight; y++) {
     RowBits targetRow = nextRows[y] & activeMask;
@@ -599,6 +787,9 @@ void renderClockAnimationFrame(uint32_t nowMs) {
       if (gClockAnimation.kind == kClockAnimationMinute) {
         targetColor = clockMinuteAnimatedColor(index, x, y, targetPixel, targetWeight,
                                                eased, nowMs);
+      } else if (gClockAnimation.kind == kClockAnimationHour) {
+        targetColor = clockHourAnimatedColor(index, x, y, targetPixel, targetWeight,
+                                             eased, hourState);
       } else if (targetPixel) {
         targetColor = clockScaledHsv565(nextHue[index], nextSat[index],
                                         nextType[index], targetWeight);
