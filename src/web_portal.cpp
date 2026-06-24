@@ -128,16 +128,93 @@ int32_t gWeatherLastLonE6 = kWeatherCoordUnset;
 TaskHandle_t gLocationDetectTask = nullptr;
 TaskHandle_t gWeatherFetchTask = nullptr;
 bool gNtpStarted = false;
+volatile bool gReqWeatherRefresh = false;
+uint32_t gWeatherRefreshDueAt = 0;
 
 void broadcastSchema();
 void broadcastClock(const ClockSettings &s, const char *source);
 void broadcastWeather(const WeatherSettings &s, const char *source);
 void locationRequestDetect(bool saveDetected, bool updateClock, bool updateWeather);
 void weatherRequestDetect(bool saveDetected);
+void scheduleWeatherRefresh(uint32_t delayMs);
 
 void copyString(char *dst, size_t cap, const char *src) {
   if (!dst || cap == 0) return;
   snprintf(dst, cap, "%s", src ? src : "");
+}
+
+bool isUtf8Continuation(uint8_t c) {
+  return (c & 0xC0) == 0x80;
+}
+
+size_t utf8SequenceBytes(const char *src, size_t remaining) {
+  if (remaining == 0) return 0;
+  uint8_t c0 = (uint8_t)src[0];
+  if (c0 < 0x80) return 1;
+  if (c0 >= 0xC2 && c0 <= 0xDF) {
+    return remaining >= 2 && isUtf8Continuation((uint8_t)src[1]) ? 2 : 0;
+  }
+  if (remaining < 3) return 0;
+  uint8_t c1 = (uint8_t)src[1];
+  uint8_t c2 = (uint8_t)src[2];
+  if (c0 == 0xE0) {
+    return c1 >= 0xA0 && c1 <= 0xBF && isUtf8Continuation(c2) ? 3 : 0;
+  }
+  if (c0 >= 0xE1 && c0 <= 0xEC) {
+    return isUtf8Continuation(c1) && isUtf8Continuation(c2) ? 3 : 0;
+  }
+  if (c0 == 0xED) {
+    return c1 >= 0x80 && c1 <= 0x9F && isUtf8Continuation(c2) ? 3 : 0;
+  }
+  if (c0 >= 0xEE && c0 <= 0xEF) {
+    return isUtf8Continuation(c1) && isUtf8Continuation(c2) ? 3 : 0;
+  }
+  if (remaining < 4) return 0;
+  uint8_t c3 = (uint8_t)src[3];
+  if (c0 == 0xF0) {
+    return c1 >= 0x90 && c1 <= 0xBF && isUtf8Continuation(c2) && isUtf8Continuation(c3) ? 4 : 0;
+  }
+  if (c0 >= 0xF1 && c0 <= 0xF3) {
+    return isUtf8Continuation(c1) && isUtf8Continuation(c2) && isUtf8Continuation(c3) ? 4 : 0;
+  }
+  if (c0 == 0xF4) {
+    return c1 >= 0x80 && c1 <= 0x8F && isUtf8Continuation(c2) && isUtf8Continuation(c3) ? 4 : 0;
+  }
+  return 0;
+}
+
+void copyUtf8String(char *dst, size_t cap, const char *src) {
+  if (!dst || cap == 0) return;
+  if (!src) { dst[0] = '\0'; return; }
+
+  size_t inLen = strlen(src);
+  size_t in = 0;
+  size_t out = 0;
+  while (in < inLen && out + 1 < cap) {
+    size_t n = utf8SequenceBytes(src + in, inLen - in);
+    if (n == 0) {
+      dst[out++] = '?';
+      in++;
+      continue;
+    }
+    if (out + n >= cap) break;  // never split a multibyte codepoint
+    memcpy(dst + out, src + in, n);
+    out += n;
+    in += n;
+  }
+  dst[out] = '\0';
+}
+
+void writeWeatherCity(JsonObject obj, const char *key, const char *city) {
+  char safe[kWeatherCityBytes];
+  copyUtf8String(safe, sizeof(safe), city);
+  obj[key] = safe;
+}
+
+void writeWeatherStatus(JsonObject obj, const char *key, const char *status) {
+  char safe[kWeatherStatusBytes];
+  copyUtf8String(safe, sizeof(safe), status);
+  obj[key] = safe;
 }
 
 bool weatherHasLocation(const WeatherSettings &s) {
@@ -341,7 +418,7 @@ void onWiFiEvent(arduino_event_t *e) {
         locationRequestDetect(/*saveDetected=*/true, gClockSaved.autoTimezone != 0,
                               gWeatherSaved.autoLocation != 0);
       } else {
-        weatherRequestRefresh();
+        scheduleWeatherRefresh(10000);
       }
       break;
     }
@@ -509,8 +586,8 @@ void writeWeatherObject(JsonObject weather, const WeatherSettings &pending,
   weather["lowTemperatureTenths"] = snapshot.lowTemperatureTenths;
   weather["windSpeedTenths"] = snapshot.windSpeedTenths;
   weather["updatedEpoch"] = (unsigned long)snapshot.updatedEpoch;
-  weather["city"] = snapshot.city;
-  weather["status"] = snapshot.status;
+  writeWeatherCity(weather, "city", snapshot.city);
+  writeWeatherStatus(weather, "status", snapshot.status);
 }
 
 // Build the full settings schema. "live" = gPending (the desired copy, mutex-guarded) —
@@ -674,8 +751,8 @@ void writeWeatherMessage(JsonDocument &doc, const WeatherSettings &s, const char
   doc["lowTemperatureTenths"] = snapshot.lowTemperatureTenths;
   doc["windSpeedTenths"] = snapshot.windSpeedTenths;
   doc["updatedEpoch"] = (unsigned long)snapshot.updatedEpoch;
-  doc["city"] = snapshot.city;
-  doc["status"] = snapshot.status;
+  writeWeatherCity(doc.as<JsonObject>(), "city", snapshot.city);
+  writeWeatherStatus(doc.as<JsonObject>(), "status", snapshot.status);
   if (source) doc["source"] = source;
 }
 
@@ -801,6 +878,16 @@ void weatherRequestDetect(bool saveDetected) {
   locationRequestDetect(saveDetected, false, true);
 }
 
+void scheduleWeatherRefresh(uint32_t delayMs) {
+  uint32_t dueAt = millis() + delayMs;
+  taskENTER_CRITICAL(&gSettingsMux);
+  if (!gReqWeatherRefresh || delayMs == 0 || (int32_t)(dueAt - gWeatherRefreshDueAt) < 0) {
+    gWeatherRefreshDueAt = dueAt;
+  }
+  gReqWeatherRefresh = true;
+  taskEXIT_CRITICAL(&gSettingsMux);
+}
+
 void weatherFetchTask(void *) {
   WeatherSettings settings;
   taskENTER_CRITICAL(&gSettingsMux);
@@ -820,6 +907,7 @@ void weatherFetchTask(void *) {
   }
   if (WiFi.status() != WL_CONNECTED) {
     setWeatherInvalidStatus("weather wifi unavailable");
+    scheduleWeatherRefresh(10000);
     gWeatherFetchTask = nullptr;
     vTaskDelete(nullptr);
     return;
@@ -1208,6 +1296,8 @@ void wsPushTask(void *) {
 }
 }  // namespace
 
+void startWeatherRefresh();
+
 void webServerStart() {
   if (gPushTask) {
     return;  // already started; idempotent across WiFi reconnects (preserves gPending)
@@ -1262,6 +1352,18 @@ void webPortalTick() {
     weatherRequestRefresh();
   }
 
+  bool doWeatherRefresh = false;
+  uint32_t nowMs = millis();
+  taskENTER_CRITICAL(&gSettingsMux);
+  if (gReqWeatherRefresh && (int32_t)(nowMs - gWeatherRefreshDueAt) >= 0) {
+    gReqWeatherRefresh = false;
+    doWeatherRefresh = true;
+  }
+  taskEXIT_CRITICAL(&gSettingsMux);
+  if (doWeatherRefresh) {
+    startWeatherRefresh();
+  }
+
   // Drain a staged browser-drawn frame: apply FIRST (read the buffer), then release it by
   // clearing the flag — so core 0 only refills gDrawBitmask once we are done reading.
   bool doDraw;
@@ -1279,7 +1381,7 @@ bool weatherCopySnapshot(WeatherSnapshot &out) {
   return out.enabled && out.valid;
 }
 
-void weatherRequestRefresh() {
+void startWeatherRefresh() {
   WeatherSettings settings;
   WeatherSnapshot snapshot;
   uint32_t lastFetchAt;
@@ -1308,6 +1410,10 @@ void weatherRequestRefresh() {
     gWeatherFetchTask = nullptr;
     setWeatherInvalidStatus("weather fetch unavailable");
   }
+}
+
+void weatherRequestRefresh() {
+  scheduleWeatherRefresh(0);
 }
 
 #else  // not S3 / benchmark build: portal compiles to nothing.
