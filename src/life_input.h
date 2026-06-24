@@ -50,7 +50,7 @@ void pollAccelerometer() {
     uint8_t knocks = (click & kClickDouble) ? 2 : 1;
 #if WIFI_PORTAL_ENABLED
     if (!gReqClockAnimation) {
-      gReqClockAnimation = kClockAnimationRequestHour;
+      gReqClockAnimation = kClockAnimationRequestKnockHour;
     }
 #endif
     knockEventsThisPeriod += knocks;

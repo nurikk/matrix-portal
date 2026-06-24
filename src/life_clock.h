@@ -18,6 +18,7 @@ struct ClockAnimationState {
   uint16_t durationMs;
   bool active;
   bool finalRendered;
+  bool fastReveal;
 };
 
 #if WIFI_PORTAL_ENABLED
@@ -119,7 +120,8 @@ bool clockReadLocal(struct tm &local, time_t &epoch) {
 }
 
 bool beginClockAnimation(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
-                         uint32_t eventMinuteId, uint32_t startedAt, uint32_t endsAt) {
+                         uint32_t eventMinuteId, uint32_t startedAt, uint32_t endsAt,
+                         bool fastReveal = false) {
   if (gClockAnimation.active) {
     return false;
   }
@@ -138,8 +140,8 @@ bool beginClockAnimation(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
   gClockAnimation.endsAt = endsAt;
   gClockAnimation.active = true;
   gClockAnimation.finalRendered = false;
+  gClockAnimation.fastReveal = fastReveal;
   if (kind == kClockAnimationHour) {
-    weatherRequestRefresh();
     gClockWeatherValid = weatherCopySnapshot(gClockWeather);
   } else {
     gClockWeatherValid = false;
@@ -153,6 +155,7 @@ ClockAnimationKind clockKindForRequest(uint8_t request) {
   case kClockAnimationRequestMinute:
     return kClockAnimationMinute;
   case kClockAnimationRequestHour:
+  case kClockAnimationRequestKnockHour:
     return kClockAnimationHour;
   default:
     return kClockAnimationNone;
@@ -181,7 +184,8 @@ bool startClockAnimationRequest(uint8_t request, uint32_t nowMs) {
   }
 
   return beginClockAnimation(kind, hour, minute, eventMinuteId, nowMs,
-                             nowMs + clockDurationMillisFor(kind));
+                             nowMs + clockDurationMillisFor(kind),
+                             request == kClockAnimationRequestKnockHour);
 }
 
 void clockUpdateSecondAnchor(time_t epoch, uint32_t nowMs) {
@@ -1075,6 +1079,8 @@ void renderClockAnimationFrame(uint32_t nowMs) {
   updatedPixels = 0;
   uint8_t progress = clockAnimationProgress(nowMs);
   uint8_t eased = clockSmoothstep8(progress);
+  bool instantReveal = gClockAnimation.fastReveal && gClockAnimation.kind == kClockAnimationHour;
+  uint8_t revealProgress = instantReveal ? 255 : eased;
   ClockHourRenderState hourState = clockHourRenderStateFor(nowMs);
 
   for (uint8_t y = 0; y < panelHeight; y++) {
@@ -1084,7 +1090,7 @@ void renderClockAnimationFrame(uint32_t nowMs) {
     for (uint8_t x = 0; x < panelWidth; x++) {
       uint16_t index = baseIndex + x;
       bool targetPixel = targetRow & bitForX[x];
-      uint8_t targetWeight = targetPixel ? clockRevealWeight(gClockAnimation.kind, x, y, eased) : 0;
+      uint8_t targetWeight = targetPixel ? clockRevealWeight(gClockAnimation.kind, x, y, revealProgress) : 0;
       uint16_t targetColor = 0;
       if (gClockAnimation.kind == kClockAnimationMinute) {
         targetColor = clockMinuteAnimatedColor(index, x, y, targetPixel, targetWeight,
@@ -1096,7 +1102,7 @@ void renderClockAnimationFrame(uint32_t nowMs) {
         targetColor = clockScaledHsv565(nextHue[index], nextSat[index],
                                         nextType[index], targetWeight);
       }
-      uint16_t color = progress >= 254 ? targetColor :
+      uint16_t color = (instantReveal || progress >= 254) ? targetColor :
                        approachColor565(drawnColor[index], targetColor,
                                          clockColorStep(gClockAnimation.kind));
 

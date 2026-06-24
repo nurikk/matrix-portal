@@ -81,6 +81,9 @@ constexpr const char *kNtpServer2 = "time.nist.gov";
 constexpr const char *kNtpServer3 = "time.google.com";
 constexpr uint32_t kWeatherCacheMs = 20UL * 60UL * 1000UL;
 constexpr uint32_t kWeatherHttpTimeoutMs = 7000;
+constexpr uint32_t kWeatherStartupRefreshDelayMs = 10000;
+constexpr uint8_t kWeatherSyncMinuteA = 25;
+constexpr uint8_t kWeatherSyncMinuteB = 55;
 constexpr const char *kWeatherProvider = "Open-Meteo";
 
 struct ClockSettings {
@@ -129,14 +132,17 @@ TaskHandle_t gLocationDetectTask = nullptr;
 TaskHandle_t gWeatherFetchTask = nullptr;
 bool gNtpStarted = false;
 volatile bool gReqWeatherRefresh = false;
+volatile bool gReqWeatherRefreshForce = false;
 uint32_t gWeatherRefreshDueAt = 0;
+uint32_t gWeatherLastScheduledMinuteId = 0;
 
 void broadcastSchema();
 void broadcastClock(const ClockSettings &s, const char *source);
 void broadcastWeather(const WeatherSettings &s, const char *source);
 void locationRequestDetect(bool saveDetected, bool updateClock, bool updateWeather);
 void weatherRequestDetect(bool saveDetected);
-void scheduleWeatherRefresh(uint32_t delayMs);
+void scheduleWeatherRefresh(uint32_t delayMs, bool force);
+void schedulePeriodicWeatherRefresh();
 
 void copyString(char *dst, size_t cap, const char *src) {
   if (!dst || cap == 0) return;
@@ -267,6 +273,14 @@ void setWeatherStatus(const char *status) {
   taskEXIT_CRITICAL(&gSettingsMux);
 }
 
+void setWeatherLoadingStatus(const char *status) {
+  taskENTER_CRITICAL(&gSettingsMux);
+  if (!gWeatherSnapshot.valid) {
+    copyString(gWeatherSnapshot.status, sizeof(gWeatherSnapshot.status), status);
+  }
+  taskEXIT_CRITICAL(&gSettingsMux);
+}
+
 void setWeatherInvalidStatus(const char *status) {
   taskENTER_CRITICAL(&gSettingsMux);
   gWeatherSnapshot.valid = false;
@@ -274,16 +288,26 @@ void setWeatherInvalidStatus(const char *status) {
   taskEXIT_CRITICAL(&gSettingsMux);
 }
 
+void setWeatherFetchFailureStatus(const char *status) {
+  taskENTER_CRITICAL(&gSettingsMux);
+  if (!gWeatherSnapshot.valid) {
+    gWeatherSnapshot.valid = false;
+    copyString(gWeatherSnapshot.status, sizeof(gWeatherSnapshot.status), status);
+  }
+  taskEXIT_CRITICAL(&gSettingsMux);
+}
+
 void weatherSyncSnapshotSettings(const WeatherSettings &s) {
   taskENTER_CRITICAL(&gSettingsMux);
   gWeatherSnapshot.enabled = s.enabled != 0;
-  gWeatherSnapshot.unitsF = s.unitsF != 0;
   if (!gWeatherSnapshot.enabled) {
     gWeatherSnapshot.valid = false;
     copyString(gWeatherSnapshot.status, sizeof(gWeatherSnapshot.status), "weather disabled");
   } else if (!weatherHasLocation(s)) {
     gWeatherSnapshot.valid = false;
     copyString(gWeatherSnapshot.status, sizeof(gWeatherSnapshot.status), "weather location needed");
+  } else if (!gWeatherSnapshot.valid) {
+    gWeatherSnapshot.unitsF = s.unitsF != 0;
   }
   taskEXIT_CRITICAL(&gSettingsMux);
 }
@@ -417,8 +441,11 @@ void onWiFiEvent(arduino_event_t *e) {
       if (gClockSaved.autoTimezone || gWeatherSaved.autoLocation) {
         locationRequestDetect(/*saveDetected=*/true, gClockSaved.autoTimezone != 0,
                               gWeatherSaved.autoLocation != 0);
+        if (!gWeatherSaved.autoLocation) {
+          scheduleWeatherRefresh(kWeatherStartupRefreshDelayMs, true);
+        }
       } else {
-        scheduleWeatherRefresh(10000);
+        scheduleWeatherRefresh(kWeatherStartupRefreshDelayMs, true);
       }
       break;
     }
@@ -878,14 +905,29 @@ void weatherRequestDetect(bool saveDetected) {
   locationRequestDetect(saveDetected, false, true);
 }
 
-void scheduleWeatherRefresh(uint32_t delayMs) {
+void scheduleWeatherRefresh(uint32_t delayMs, bool force) {
   uint32_t dueAt = millis() + delayMs;
   taskENTER_CRITICAL(&gSettingsMux);
   if (!gReqWeatherRefresh || delayMs == 0 || (int32_t)(dueAt - gWeatherRefreshDueAt) < 0) {
     gWeatherRefreshDueAt = dueAt;
   }
+  if (force) {
+    gReqWeatherRefreshForce = true;
+  }
   gReqWeatherRefresh = true;
   taskEXIT_CRITICAL(&gSettingsMux);
+}
+
+void schedulePeriodicWeatherRefresh() {
+  time_t now = time(nullptr);
+  if (now < 1609459200) return;
+  struct tm local;
+  localtime_r(&now, &local);
+  if (local.tm_min != kWeatherSyncMinuteA && local.tm_min != kWeatherSyncMinuteB) return;
+  uint32_t minuteId = static_cast<uint32_t>(now / 60);
+  if (minuteId == gWeatherLastScheduledMinuteId) return;
+  gWeatherLastScheduledMinuteId = minuteId;
+  scheduleWeatherRefresh(0, true);
 }
 
 void weatherFetchTask(void *) {
@@ -906,8 +948,8 @@ void weatherFetchTask(void *) {
     return;
   }
   if (WiFi.status() != WL_CONNECTED) {
-    setWeatherInvalidStatus("weather wifi unavailable");
-    scheduleWeatherRefresh(10000);
+    setWeatherFetchFailureStatus("weather wifi unavailable");
+    scheduleWeatherRefresh(kWeatherStartupRefreshDelayMs, true);
     gWeatherFetchTask = nullptr;
     vTaskDelete(nullptr);
     return;
@@ -927,7 +969,7 @@ void weatherFetchTask(void *) {
            lat, lon, settings.unitsF ? "fahrenheit" : "celsius",
            settings.unitsF ? "mph" : "kmh");
 
-  setWeatherStatus("weather fetching");
+  setWeatherLoadingStatus("weather fetching");
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
@@ -1002,7 +1044,7 @@ void weatherFetchTask(void *) {
                   (long)(apparentTenths / 10), labs(apparentTenths % 10), precipitationProbability,
                   windSpeedTenths / 10, windSpeedTenths % 10, weatherCode);
   } else {
-    setWeatherInvalidStatus("weather fetch failed");
+    setWeatherFetchFailureStatus("weather fetch failed");
   }
 
   broadcastSchema();
@@ -1296,7 +1338,7 @@ void wsPushTask(void *) {
 }
 }  // namespace
 
-void startWeatherRefresh();
+void startWeatherRefresh(bool force);
 
 void webServerStart() {
   if (gPushTask) {
@@ -1322,6 +1364,8 @@ void webServerStart() {
 }
 
 void webPortalTick() {
+  schedulePeriodicWeatherRefresh();
+
   if (gPendingDirty) {
     LifeSettings next;
     taskENTER_CRITICAL(&gSettingsMux);
@@ -1353,15 +1397,18 @@ void webPortalTick() {
   }
 
   bool doWeatherRefresh = false;
+  bool forceWeatherRefresh = false;
   uint32_t nowMs = millis();
   taskENTER_CRITICAL(&gSettingsMux);
   if (gReqWeatherRefresh && (int32_t)(nowMs - gWeatherRefreshDueAt) >= 0) {
     gReqWeatherRefresh = false;
+    forceWeatherRefresh = gReqWeatherRefreshForce;
+    gReqWeatherRefreshForce = false;
     doWeatherRefresh = true;
   }
   taskEXIT_CRITICAL(&gSettingsMux);
   if (doWeatherRefresh) {
-    startWeatherRefresh();
+    startWeatherRefresh(forceWeatherRefresh);
   }
 
   // Drain a staged browser-drawn frame: apply FIRST (read the buffer), then release it by
@@ -1381,7 +1428,7 @@ bool weatherCopySnapshot(WeatherSnapshot &out) {
   return out.enabled && out.valid;
 }
 
-void startWeatherRefresh() {
+void startWeatherRefresh(bool force) {
   WeatherSettings settings;
   WeatherSnapshot snapshot;
   uint32_t lastFetchAt;
@@ -1398,7 +1445,7 @@ void startWeatherRefresh() {
   weatherSyncSnapshotSettings(settings);
   if (!settings.enabled || !weatherHasLocation(settings)) return;
   uint32_t now = millis();
-  if (snapshot.valid && lastFetchAt != 0 && now - lastFetchAt < kWeatherCacheMs &&
+  if (!force && snapshot.valid && lastFetchAt != 0 && now - lastFetchAt < kWeatherCacheMs &&
       snapshot.unitsF == (settings.unitsF != 0) && lastLatE6 == settings.latitudeE6 &&
       lastLonE6 == settings.longitudeE6) {
     return;
@@ -1408,12 +1455,12 @@ void startWeatherRefresh() {
                                                nullptr, 1, &gWeatherFetchTask, 0);
   if (created != pdPASS) {
     gWeatherFetchTask = nullptr;
-    setWeatherInvalidStatus("weather fetch unavailable");
+    setWeatherFetchFailureStatus("weather fetch unavailable");
   }
 }
 
 void weatherRequestRefresh() {
-  scheduleWeatherRefresh(0);
+  scheduleWeatherRefresh(0, true);
 }
 
 #else  // not S3 / benchmark build: portal compiles to nothing.
