@@ -5,6 +5,7 @@
 
 #include "life_bits.h"
 #include "life_settings.h"
+#include "weather_state.h"
 
 #if defined(ARDUINO_ADAFRUIT_MATRIXPORTAL_ESP32S3)
 // MatrixPortal S3 HUB75 pinout from Adafruit Protomatter's official example.

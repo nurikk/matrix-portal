@@ -1,10 +1,13 @@
 #include "web_portal.h"
+#include "weather_state.h"
 
 #if defined(ARDUINO_ADAFRUIT_MATRIXPORTAL_ESP32S3) && !defined(MATRIX_BENCHMARK)
 
 #include <Arduino.h>
+#include <HTTPClient.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <WiFiProv.h>
 #include <ESPmDNS.h>
 #include <ESPAsyncWebServer.h>   // brings in AsyncWebSocket
@@ -13,7 +16,9 @@
 #include <time.h>
 #include <timezonedb_lookup.h>
 #include <ctype.h>
+#include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include "life_settings.h"
 
 extern LifeSettings gLive;
@@ -61,6 +66,11 @@ constexpr const char *kKeyVersion = "ver";
 constexpr const char *kKeyBlob = "settings";
 constexpr const char *kKeyClockTimezone = "clockTz";
 constexpr const char *kKeyClockAuto = "clockAuto";
+constexpr const char *kKeyWeatherEnabled = "wxEn";
+constexpr const char *kKeyWeatherAuto = "wxAuto";
+constexpr const char *kKeyWeatherUnitsF = "wxUnitsF";
+constexpr const char *kKeyWeatherLat = "wxLat";
+constexpr const char *kKeyWeatherLon = "wxLon";
 constexpr const char *kProvServiceName = "PROV_MatrixLife";
 constexpr const char *kProvPop = "matrixlife";   // proof-of-possession entered in the app
 constexpr const char *kMdnsHost = "matrixportal";
@@ -69,11 +79,24 @@ constexpr const char *kDefaultTimezone = "UTC";
 constexpr const char *kNtpServer1 = "pool.ntp.org";
 constexpr const char *kNtpServer2 = "time.nist.gov";
 constexpr const char *kNtpServer3 = "time.google.com";
+constexpr uint32_t kWeatherCacheMs = 20UL * 60UL * 1000UL;
+constexpr uint32_t kWeatherHttpTimeoutMs = 7000;
+constexpr const char *kWeatherProvider = "Open-Meteo";
 
 struct ClockSettings {
   char timezone[kTimezoneNameBytes];
   uint8_t autoTimezone;
 };
+
+WeatherSettings defaultWeatherSettings() {
+  WeatherSettings s = {};
+  s.enabled = 1;
+  s.autoLocation = 1;
+  s.unitsF = 0;
+  s.latitudeE6 = kWeatherCoordUnset;
+  s.longitudeE6 = kWeatherCoordUnset;
+  return s;
+}
 
 ClockSettings defaultClockSettings() {
   ClockSettings s = {};
@@ -90,19 +113,109 @@ ClockSettings gClockSaved = defaultClockSettings();
 ClockSettings gClockLive = defaultClockSettings();
 ClockSettings gClockPending = defaultClockSettings();
 volatile bool gClockPendingDirty = false;
+WeatherSettings gWeatherDefaults = defaultWeatherSettings();
+WeatherSettings gWeatherSaved = defaultWeatherSettings();
+WeatherSettings gWeatherLive = defaultWeatherSettings();
+WeatherSettings gWeatherPending = defaultWeatherSettings();
+volatile bool gWeatherPendingDirty = false;
 char gDetectedTimezone[kTimezoneNameBytes] = "";
 char gClockStatus[48] = "clock not synced";
 char gClockPosix[64] = "UTC0";
-TaskHandle_t gClockDetectTask = nullptr;
+WeatherSnapshot gWeatherSnapshot = {true, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", "weather not fetched"};
+uint32_t gWeatherLastFetchAt = 0;
+int32_t gWeatherLastLatE6 = kWeatherCoordUnset;
+int32_t gWeatherLastLonE6 = kWeatherCoordUnset;
+TaskHandle_t gLocationDetectTask = nullptr;
+TaskHandle_t gWeatherFetchTask = nullptr;
 bool gNtpStarted = false;
 
 void broadcastSchema();
 void broadcastClock(const ClockSettings &s, const char *source);
-void clockRequestDetect(bool saveDetected);
+void broadcastWeather(const WeatherSettings &s, const char *source);
+void locationRequestDetect(bool saveDetected, bool updateClock, bool updateWeather);
+void weatherRequestDetect(bool saveDetected);
 
 void copyString(char *dst, size_t cap, const char *src) {
   if (!dst || cap == 0) return;
   snprintf(dst, cap, "%s", src ? src : "");
+}
+
+bool weatherHasLocation(const WeatherSettings &s) {
+  return s.latitudeE6 != kWeatherCoordUnset && s.longitudeE6 != kWeatherCoordUnset;
+}
+
+bool normalizeWeatherCoord(float lat, float lon, int32_t &latE6, int32_t &lonE6) {
+  if (!isfinite(lat) || !isfinite(lon)) return false;
+  if (lat < -90.0f || lat > 90.0f || lon < -180.0f || lon > 180.0f) return false;
+  latE6 = static_cast<int32_t>(lat * 1000000.0f + (lat >= 0.0f ? 0.5f : -0.5f));
+  lonE6 = static_cast<int32_t>(lon * 1000000.0f + (lon >= 0.0f ? 0.5f : -0.5f));
+  return true;
+}
+
+int16_t weatherTenths(float v) {
+  return static_cast<int16_t>(v * 10.0f + (v >= 0.0f ? 0.5f : -0.5f));
+}
+
+uint8_t weatherPercent(long v) {
+  if (v < 0) return 0;
+  if (v > 100) return 100;
+  return static_cast<uint8_t>(v);
+}
+
+uint16_t weatherSpeedTenths(float v) {
+  if (!isfinite(v) || v < 0.0f) return 0;
+  if (v > 999.9f) return 9999;
+  return static_cast<uint16_t>(v * 10.0f + 0.5f);
+}
+
+bool parseFloatText(const char *text, float &out) {
+  if (!text || !*text) return false;
+  char *end = nullptr;
+  out = strtof(text, &end);
+  while (end && *end && isspace((unsigned char)*end)) end++;
+  return end && *end == '\0' && isfinite(out);
+}
+
+void formatWeatherCoord(int32_t e6, char *out, size_t cap) {
+  if (!out || cap == 0) return;
+  bool neg = e6 < 0;
+  int32_t absValue = neg ? -e6 : e6;
+  snprintf(out, cap, "%s%ld.%06ld", neg ? "-" : "",
+           static_cast<long>(absValue / 1000000L), static_cast<long>(absValue % 1000000L));
+}
+
+void setWeatherStatus(const char *status) {
+  taskENTER_CRITICAL(&gSettingsMux);
+  copyString(gWeatherSnapshot.status, sizeof(gWeatherSnapshot.status), status);
+  taskEXIT_CRITICAL(&gSettingsMux);
+}
+
+void setWeatherInvalidStatus(const char *status) {
+  taskENTER_CRITICAL(&gSettingsMux);
+  gWeatherSnapshot.valid = false;
+  copyString(gWeatherSnapshot.status, sizeof(gWeatherSnapshot.status), status);
+  taskEXIT_CRITICAL(&gSettingsMux);
+}
+
+void weatherSyncSnapshotSettings(const WeatherSettings &s) {
+  taskENTER_CRITICAL(&gSettingsMux);
+  gWeatherSnapshot.enabled = s.enabled != 0;
+  gWeatherSnapshot.unitsF = s.unitsF != 0;
+  if (!gWeatherSnapshot.enabled) {
+    gWeatherSnapshot.valid = false;
+    copyString(gWeatherSnapshot.status, sizeof(gWeatherSnapshot.status), "weather disabled");
+  } else if (!weatherHasLocation(s)) {
+    gWeatherSnapshot.valid = false;
+    copyString(gWeatherSnapshot.status, sizeof(gWeatherSnapshot.status), "weather location needed");
+  }
+  taskEXIT_CRITICAL(&gSettingsMux);
+}
+
+void publishWeatherPending(const WeatherSettings &s) {
+  taskENTER_CRITICAL(&gSettingsMux);
+  gWeatherPending = s;
+  gWeatherPendingDirty = true;
+  taskEXIT_CRITICAL(&gSettingsMux);
 }
 
 bool lookupClockPosix(const char *timezone, const char **posix) {
@@ -187,6 +300,21 @@ void clockSaveToNvs(const ClockSettings &s) {
   }
 }
 
+void weatherSaveToNvs(const WeatherSettings &s) {
+  Preferences prefs;
+  if (prefs.begin(kNvsNamespace, /*readOnly=*/false)) {
+    prefs.putBool(kKeyWeatherEnabled, s.enabled != 0);
+    prefs.putBool(kKeyWeatherAuto, s.autoLocation != 0);
+    prefs.putBool(kKeyWeatherUnitsF, s.unitsF != 0);
+    prefs.putInt(kKeyWeatherLat, s.latitudeE6);
+    prefs.putInt(kKeyWeatherLon, s.longitudeE6);
+    prefs.end();
+    taskENTER_CRITICAL(&gSettingsMux);
+    gWeatherSaved = s;
+    taskEXIT_CRITICAL(&gSettingsMux);
+  }
+}
+
 void publishClockPending(const ClockSettings &s) {
   taskENTER_CRITICAL(&gSettingsMux);
   gClockPending = s;
@@ -209,7 +337,12 @@ void onWiFiEvent(arduino_event_t *e) {
       gShowIpScroll = true;       // main loop scrolls it once
       webServerStart();           // forward-declared above; defined below
       clockStartNtp();
-      if (gClockSaved.autoTimezone) clockRequestDetect(/*saveDetected=*/true);
+      if (gClockSaved.autoTimezone || gWeatherSaved.autoLocation) {
+        locationRequestDetect(/*saveDetected=*/true, gClockSaved.autoTimezone != 0,
+                              gWeatherSaved.autoLocation != 0);
+      } else {
+        weatherRequestRefresh();
+      }
       break;
     }
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
@@ -224,6 +357,7 @@ void onWiFiEvent(arduino_event_t *e) {
 void settingsLoadFromNvs() {
   gSaved = defaultLifeSettings();
   gClockSaved = gClockDefaults;
+  gWeatherSaved = gWeatherDefaults;
 
   Preferences prefs;
   if (prefs.begin(kNvsNamespace, /*readOnly=*/true)) {
@@ -242,13 +376,27 @@ void settingsLoadFromNvs() {
       copyString(gClockSaved.timezone, sizeof(gClockSaved.timezone), normalized);
     }
     gClockSaved.autoTimezone = prefs.getBool(kKeyClockAuto, true) ? 1 : 0;
+    gWeatherSaved.enabled = prefs.getBool(kKeyWeatherEnabled, true) ? 1 : 0;
+    gWeatherSaved.autoLocation = prefs.getBool(kKeyWeatherAuto, true) ? 1 : 0;
+    gWeatherSaved.unitsF = prefs.getBool(kKeyWeatherUnitsF, false) ? 1 : 0;
+    gWeatherSaved.latitudeE6 = prefs.getInt(kKeyWeatherLat, kWeatherCoordUnset);
+    gWeatherSaved.longitudeE6 = prefs.getInt(kKeyWeatherLon, kWeatherCoordUnset);
+    if (gWeatherSaved.latitudeE6 < -90000000L || gWeatherSaved.latitudeE6 > 90000000L ||
+        gWeatherSaved.longitudeE6 < -180000000L || gWeatherSaved.longitudeE6 > 180000000L) {
+      gWeatherSaved.latitudeE6 = kWeatherCoordUnset;
+      gWeatherSaved.longitudeE6 = kWeatherCoordUnset;
+    }
     prefs.end();
   }
   gLive = gSaved;
   gClockLive = gClockSaved;
   gClockPending = gClockLive;
   gClockPendingDirty = false;
+  gWeatherLive = gWeatherSaved;
+  gWeatherPending = gWeatherLive;
+  gWeatherPendingDirty = false;
   clockApplyTimezone(gClockLive.timezone);
+  weatherSyncSnapshotSettings(gWeatherLive);
 }
 
 void settingsSaveToNvs(const LifeSettings &s) {
@@ -285,7 +433,7 @@ AsyncWebServer gServer(80);
 AsyncWebSocket gWs("/ws");
 TaskHandle_t gPushTask = nullptr;
 
-constexpr size_t kMaxWsFrameBytes = 256;   // control frames are tiny; reject larger pre-parse
+constexpr size_t kMaxWsFrameBytes = 512;   // control frames are small; reject larger pre-parse
 constexpr uint32_t kStatsPushMs = 500;
 
 // --- Live board mirror (binary frames) ---
@@ -323,6 +471,48 @@ portMUX_TYPE gDrawMux = portMUX_INITIALIZER_UNLOCKED;
 uint8_t gDrawBitmask[kDrawMaskBytes];
 volatile bool gReqDraw = false;
 
+void writeWeatherCoord(JsonObject obj, const char *key, int32_t e6) {
+  if (e6 == kWeatherCoordUnset) {
+    obj[key] = "";
+    return;
+  }
+  char text[18];
+  formatWeatherCoord(e6, text, sizeof(text));
+  obj[key] = text;
+}
+
+void writeWeatherObject(JsonObject weather, const WeatherSettings &pending,
+                        const WeatherSettings &saved, const WeatherSnapshot &snapshot) {
+  weather["provider"] = kWeatherProvider;
+  weather["enabled"] = pending.enabled != 0;
+  weather["autoLocation"] = pending.autoLocation != 0;
+  weather["unitsF"] = pending.unitsF != 0;
+  weather["savedEnabled"] = saved.enabled != 0;
+  weather["savedAutoLocation"] = saved.autoLocation != 0;
+  weather["savedUnitsF"] = saved.unitsF != 0;
+  weather["defaultEnabled"] = gWeatherDefaults.enabled != 0;
+  weather["defaultAutoLocation"] = gWeatherDefaults.autoLocation != 0;
+  weather["defaultUnitsF"] = gWeatherDefaults.unitsF != 0;
+  weather["hasLocation"] = weatherHasLocation(pending);
+  writeWeatherCoord(weather, "latitude", pending.latitudeE6);
+  writeWeatherCoord(weather, "longitude", pending.longitudeE6);
+  writeWeatherCoord(weather, "savedLatitude", saved.latitudeE6);
+  writeWeatherCoord(weather, "savedLongitude", saved.longitudeE6);
+  writeWeatherCoord(weather, "defaultLatitude", gWeatherDefaults.latitudeE6);
+  writeWeatherCoord(weather, "defaultLongitude", gWeatherDefaults.longitudeE6);
+  weather["valid"] = snapshot.valid;
+  weather["weatherCode"] = snapshot.weatherCode;
+  weather["precipitationProbability"] = snapshot.precipitationProbability;
+  weather["temperatureTenths"] = snapshot.temperatureTenths;
+  weather["apparentTemperatureTenths"] = snapshot.apparentTemperatureTenths;
+  weather["highTemperatureTenths"] = snapshot.highTemperatureTenths;
+  weather["lowTemperatureTenths"] = snapshot.lowTemperatureTenths;
+  weather["windSpeedTenths"] = snapshot.windSpeedTenths;
+  weather["updatedEpoch"] = (unsigned long)snapshot.updatedEpoch;
+  weather["city"] = snapshot.city;
+  weather["status"] = snapshot.status;
+}
+
 // Build the full settings schema. "live" = gPending (the desired copy, mutex-guarded) —
 // matches the old sendSettingsJson and avoids reading core-1-owned gLive from core 0.
 // Caller must NOT hold gSettingsMux.
@@ -330,6 +520,9 @@ void buildSchemaDoc(JsonDocument &doc) {
   LifeSettings pend;
   ClockSettings clockPend;
   ClockSettings clockSaved;
+  WeatherSettings weatherPend;
+  WeatherSettings weatherSaved;
+  WeatherSnapshot weatherSnapshot;
   char detected[kTimezoneNameBytes];
   char status[sizeof(gClockStatus)];
   char posix[sizeof(gClockPosix)];
@@ -337,6 +530,9 @@ void buildSchemaDoc(JsonDocument &doc) {
   pend = gPending;
   clockPend = gClockPending;
   clockSaved = gClockSaved;
+  weatherPend = gWeatherPending;
+  weatherSaved = gWeatherSaved;
+  weatherSnapshot = gWeatherSnapshot;
   copyString(detected, sizeof(detected), gDetectedTimezone);
   copyString(status, sizeof(status), gClockStatus);
   copyString(posix, sizeof(posix), gClockPosix);
@@ -378,6 +574,9 @@ void buildSchemaDoc(JsonDocument &doc) {
   clock["posix"] = posix;
   clock["synced"] = synced;
   if (synced) clock["localTime"] = localTime;
+
+  JsonObject weather = doc["weather"].to<JsonObject>();
+  writeWeatherObject(weather, weatherPend, weatherSaved, weatherSnapshot);
 }
 
 // Stats are read cross-core (core 1 writes, this runs on core 0) WITHOUT a lock. This is a
@@ -397,9 +596,15 @@ void buildStatsDoc(JsonDocument &doc) {
   doc["frameEncoding"] = gLastFrameWasRle ? "rle" : "raw";
 
   ClockSettings clockPend;
+  WeatherSettings weatherPend;
+  WeatherSettings weatherSaved;
+  WeatherSnapshot weatherSnapshot;
   char status[sizeof(gClockStatus)];
   taskENTER_CRITICAL(&gSettingsMux);
   clockPend = gClockPending;
+  weatherPend = gWeatherPending;
+  weatherSaved = gWeatherSaved;
+  weatherSnapshot = gWeatherSnapshot;
   copyString(status, sizeof(status), gClockStatus);
   taskEXIT_CRITICAL(&gSettingsMux);
 
@@ -411,6 +616,9 @@ void buildStatsDoc(JsonDocument &doc) {
   clock["synced"] = synced;
   clock["status"] = synced ? "synced" : status;
   if (synced) clock["localTime"] = localTime;
+
+  JsonObject weather = doc["weather"].to<JsonObject>();
+  writeWeatherObject(weather, weatherPend, weatherSaved, weatherSnapshot);
 }
 
 void publishPending(const LifeSettings &s) {
@@ -444,54 +652,274 @@ void broadcastClock(const ClockSettings &s, const char *source) {
   gWs.textAll(out);
 }
 
-void clockDetectTask(void *param) {
-  bool saveDetected = ((uintptr_t)param) != 0;
+void writeWeatherMessage(JsonDocument &doc, const WeatherSettings &s, const char *source) {
+  WeatherSnapshot snapshot;
+  taskENTER_CRITICAL(&gSettingsMux);
+  snapshot = gWeatherSnapshot;
+  taskEXIT_CRITICAL(&gSettingsMux);
+
+  doc["type"] = "weather";
+  doc["enabled"] = s.enabled != 0;
+  doc["autoLocation"] = s.autoLocation != 0;
+  doc["unitsF"] = s.unitsF != 0;
+  doc["hasLocation"] = weatherHasLocation(s);
+  writeWeatherCoord(doc.as<JsonObject>(), "latitude", s.latitudeE6);
+  writeWeatherCoord(doc.as<JsonObject>(), "longitude", s.longitudeE6);
+  doc["valid"] = snapshot.valid;
+  doc["weatherCode"] = snapshot.weatherCode;
+  doc["precipitationProbability"] = snapshot.precipitationProbability;
+  doc["temperatureTenths"] = snapshot.temperatureTenths;
+  doc["apparentTemperatureTenths"] = snapshot.apparentTemperatureTenths;
+  doc["highTemperatureTenths"] = snapshot.highTemperatureTenths;
+  doc["lowTemperatureTenths"] = snapshot.lowTemperatureTenths;
+  doc["windSpeedTenths"] = snapshot.windSpeedTenths;
+  doc["updatedEpoch"] = (unsigned long)snapshot.updatedEpoch;
+  doc["city"] = snapshot.city;
+  doc["status"] = snapshot.status;
+  if (source) doc["source"] = source;
+}
+
+void broadcastWeather(const WeatherSettings &s, const char *source) {
+  JsonDocument doc;
+  writeWeatherMessage(doc, s, source);
+  String out;
+  serializeJson(doc, out);
+  gWs.textAll(out);
+}
+
+enum LocationDetectFlags : uintptr_t {
+  kDetectSave = 1,
+  kDetectClock = 2,
+  kDetectWeather = 4,
+};
+
+void locationDetectTask(void *param) {
+  uintptr_t flags = (uintptr_t)param;
+  bool saveDetected = (flags & kDetectSave) != 0;
+  bool updateClock = (flags & kDetectClock) != 0;
+  bool updateWeather = (flags & kDetectWeather) != 0;
   GeoIP geoip;
   location_t loc = geoip.getGeoFromWiFi(false);
-  ClockSettings work;
-  ClockSettings saved;
-  char detected[kTimezoneNameBytes];
-  bool ok = loc.status && normalizeClockTimezone(loc.timezone, detected, sizeof(detected));
+  bool schemaDirty = saveDetected;
 
-  if (ok) {
-    taskENTER_CRITICAL(&gSettingsMux);
-    copyString(gDetectedTimezone, sizeof(gDetectedTimezone), detected);
-    work = gClockPending;
-    saved = gClockSaved;
-    copyString(work.timezone, sizeof(work.timezone), detected);
-    work.autoTimezone = 1;
-    gClockPending = work;
-    gClockPendingDirty = true;
-    taskEXIT_CRITICAL(&gSettingsMux);
+  if (updateClock) {
+    ClockSettings work;
+    ClockSettings saved;
+    char detected[kTimezoneNameBytes];
+    bool ok = loc.status && normalizeClockTimezone(loc.timezone, detected, sizeof(detected));
 
-    Serial.printf("[clock] timezone detected: %s\n", detected);
-    if (saveDetected) {
-      if (strcmp(saved.timezone, work.timezone) != 0 || saved.autoTimezone != work.autoTimezone) {
-        clockSaveToNvs(work);
+    if (ok) {
+      taskENTER_CRITICAL(&gSettingsMux);
+      copyString(gDetectedTimezone, sizeof(gDetectedTimezone), detected);
+      work = gClockPending;
+      saved = gClockSaved;
+      copyString(work.timezone, sizeof(work.timezone), detected);
+      work.autoTimezone = 1;
+      gClockPending = work;
+      gClockPendingDirty = true;
+      taskEXIT_CRITICAL(&gSettingsMux);
+
+      Serial.printf("[clock] timezone detected: %s\n", detected);
+      if (saveDetected) {
+        if (strcmp(saved.timezone, work.timezone) != 0 || saved.autoTimezone != work.autoTimezone) {
+          clockSaveToNvs(work);
+        }
+      } else {
+        broadcastClock(work, "detect");
       }
-      broadcastSchema();
     } else {
-      broadcastClock(work, "detect");
+      Serial.println("[clock] timezone detection failed");
+      setClockStatus("timezone detect failed");
+      schemaDirty = true;
     }
-  } else {
-    Serial.println("[clock] timezone detection failed");
-    setClockStatus("timezone detect failed");
+  }
+
+  if (updateWeather) {
+    int32_t latE6;
+    int32_t lonE6;
+    bool ok = loc.status && normalizeWeatherCoord(loc.latitude, loc.longitude, latE6, lonE6);
+    if (ok) {
+      WeatherSettings work;
+      WeatherSettings saved;
+      const char *place = loc.city[0] ? loc.city : (loc.region[0] ? loc.region : loc.country);
+      taskENTER_CRITICAL(&gSettingsMux);
+      work = gWeatherPending;
+      saved = gWeatherSaved;
+      work.latitudeE6 = latE6;
+      work.longitudeE6 = lonE6;
+      work.autoLocation = 1;
+      gWeatherPending = work;
+      gWeatherPendingDirty = true;
+      copyString(gWeatherSnapshot.city, sizeof(gWeatherSnapshot.city), place);
+      copyString(gWeatherSnapshot.status, sizeof(gWeatherSnapshot.status), "weather location detected");
+      taskEXIT_CRITICAL(&gSettingsMux);
+
+      char latText[18];
+      char lonText[18];
+      formatWeatherCoord(latE6, latText, sizeof(latText));
+      formatWeatherCoord(lonE6, lonText, sizeof(lonText));
+      Serial.printf("[weather] location detected: %s,%s %s\n", latText, lonText, place);
+      if (saveDetected) {
+        if (saved.enabled != work.enabled || saved.autoLocation != work.autoLocation ||
+            saved.unitsF != work.unitsF || saved.latitudeE6 != work.latitudeE6 ||
+            saved.longitudeE6 != work.longitudeE6) {
+          weatherSaveToNvs(work);
+        }
+      } else {
+        broadcastWeather(work, "detect");
+      }
+    } else {
+      Serial.println("[weather] location detection failed");
+      setWeatherStatus("weather location failed");
+      schemaDirty = true;
+    }
+  }
+
+  if (schemaDirty) {
     broadcastSchema();
   }
 
-  gClockDetectTask = nullptr;
+  gLocationDetectTask = nullptr;
   vTaskDelete(nullptr);
 }
 
-void clockRequestDetect(bool saveDetected) {
-  if (gClockDetectTask) return;
-  BaseType_t created = xTaskCreatePinnedToCore(clockDetectTask, "tzdetect", 8192,
-                                               (void *)(uintptr_t)(saveDetected ? 1 : 0),
-                                               1, &gClockDetectTask, 0);
+void locationRequestDetect(bool saveDetected, bool updateClock, bool updateWeather) {
+  if (gLocationDetectTask || (!updateClock && !updateWeather)) return;
+  uintptr_t flags = (saveDetected ? kDetectSave : 0) |
+                    (updateClock ? kDetectClock : 0) |
+                    (updateWeather ? kDetectWeather : 0);
+  BaseType_t created = xTaskCreatePinnedToCore(locationDetectTask, "locdetect", 8192,
+                                               (void *)flags, 1, &gLocationDetectTask, 0);
   if (created != pdPASS) {
-    gClockDetectTask = nullptr;
-    setClockStatus("timezone detect unavailable");
+    gLocationDetectTask = nullptr;
+    if (updateClock) setClockStatus("timezone detect unavailable");
+    if (updateWeather) setWeatherStatus("weather detect unavailable");
   }
+}
+
+void weatherRequestDetect(bool saveDetected) {
+  locationRequestDetect(saveDetected, false, true);
+}
+
+void weatherFetchTask(void *) {
+  WeatherSettings settings;
+  taskENTER_CRITICAL(&gSettingsMux);
+  settings = gWeatherLive;
+  taskEXIT_CRITICAL(&gSettingsMux);
+  weatherSyncSnapshotSettings(settings);
+
+  if (!settings.enabled) {
+    gWeatherFetchTask = nullptr;
+    vTaskDelete(nullptr);
+    return;
+  }
+  if (!weatherHasLocation(settings)) {
+    gWeatherFetchTask = nullptr;
+    vTaskDelete(nullptr);
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    setWeatherInvalidStatus("weather wifi unavailable");
+    gWeatherFetchTask = nullptr;
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  char lat[18];
+  char lon[18];
+  formatWeatherCoord(settings.latitudeE6, lat, sizeof(lat));
+  formatWeatherCoord(settings.longitudeE6, lon, sizeof(lon));
+  char url[384];
+  snprintf(url, sizeof(url),
+           "https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
+           "&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m"
+           "&hourly=precipitation_probability"
+           "&daily=temperature_2m_max,temperature_2m_min"
+           "&temperature_unit=%s&wind_speed_unit=%s&timezone=auto&forecast_days=1&forecast_hours=1",
+           lat, lon, settings.unitsF ? "fahrenheit" : "celsius",
+           settings.unitsF ? "mph" : "kmh");
+
+  setWeatherStatus("weather fetching");
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.setTimeout(kWeatherHttpTimeoutMs);
+  bool ok = false;
+  int16_t tempTenths = 0;
+  int16_t apparentTenths = 0;
+  int16_t highTenths = 0;
+  int16_t lowTenths = 0;
+  uint16_t windSpeedTenths = 0;
+  uint8_t precipitationProbability = 0;
+  uint8_t weatherCode = 0;
+  if (http.begin(client, url)) {
+    int status = http.GET();
+    if (status == HTTP_CODE_OK) {
+      String body = http.getString();
+      JsonDocument doc;
+      if (!deserializeJson(doc, body)) {
+        JsonObject current = doc["current"].as<JsonObject>();
+        JsonObject hourly = doc["hourly"].as<JsonObject>();
+        JsonObject daily = doc["daily"].as<JsonObject>();
+        if (!current["temperature_2m"].isNull() && !current["apparent_temperature"].isNull() &&
+            !current["weather_code"].isNull() && !current["wind_speed_10m"].isNull() &&
+            !hourly["precipitation_probability"][0].isNull() &&
+            !daily["temperature_2m_max"][0].isNull() && !daily["temperature_2m_min"][0].isNull()) {
+          float temp = current["temperature_2m"] | 0.0f;
+          float apparent = current["apparent_temperature"] | temp;
+          float wind = current["wind_speed_10m"] | 0.0f;
+          float high = daily["temperature_2m_max"][0] | temp;
+          float low = daily["temperature_2m_min"][0] | temp;
+          long precip = hourly["precipitation_probability"][0] | 0L;
+          long code = current["weather_code"] | 0L;
+          tempTenths = weatherTenths(temp);
+          apparentTenths = weatherTenths(apparent);
+          highTenths = weatherTenths(high);
+          lowTenths = weatherTenths(low);
+          windSpeedTenths = weatherSpeedTenths(wind);
+          precipitationProbability = weatherPercent(precip);
+          if (code < 0) code = 0;
+          if (code > 255) code = 255;
+          weatherCode = static_cast<uint8_t>(code);
+          ok = true;
+        }
+      }
+    } else {
+      Serial.printf("[weather] fetch failed: HTTP %d\n", status);
+    }
+    http.end();
+  }
+
+  if (ok) {
+    time_t now = time(nullptr);
+    taskENTER_CRITICAL(&gSettingsMux);
+    gWeatherSnapshot.enabled = true;
+    gWeatherSnapshot.valid = true;
+    gWeatherSnapshot.unitsF = settings.unitsF != 0;
+    gWeatherSnapshot.weatherCode = weatherCode;
+    gWeatherSnapshot.precipitationProbability = precipitationProbability;
+    gWeatherSnapshot.temperatureTenths = tempTenths;
+    gWeatherSnapshot.apparentTemperatureTenths = apparentTenths;
+    gWeatherSnapshot.highTemperatureTenths = highTenths;
+    gWeatherSnapshot.lowTemperatureTenths = lowTenths;
+    gWeatherSnapshot.windSpeedTenths = windSpeedTenths;
+    gWeatherSnapshot.updatedEpoch = now >= 1609459200 ? static_cast<uint32_t>(now) : 0;
+    gWeatherLastFetchAt = millis();
+    gWeatherLastLatE6 = settings.latitudeE6;
+    gWeatherLastLonE6 = settings.longitudeE6;
+    copyString(gWeatherSnapshot.status, sizeof(gWeatherSnapshot.status), "weather ready");
+    taskEXIT_CRITICAL(&gSettingsMux);
+    Serial.printf("[weather] %ld.%ld %c feels %ld.%ld rain %u%% wind %u.%u code %u\n",
+                  (long)(tempTenths / 10), labs(tempTenths % 10), settings.unitsF ? 'F' : 'c',
+                  (long)(apparentTenths / 10), labs(apparentTenths % 10), precipitationProbability,
+                  windSpeedTenths / 10, windSpeedTenths % 10, weatherCode);
+  } else {
+    setWeatherInvalidStatus("weather fetch failed");
+  }
+
+  broadcastSchema();
+  gWeatherFetchTask = nullptr;
+  vTaskDelete(nullptr);
 }
 
 // === Inbound message dispatcher — parse one JSON text frame and route it. ===
@@ -556,6 +984,49 @@ bool dispatchWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t
     return true;
   }
 
+  if (strcmp(type, "weather") == 0) {
+    WeatherSettings work;
+    taskENTER_CRITICAL(&gSettingsMux);
+    work = gWeatherPending;
+    taskEXIT_CRITICAL(&gSettingsMux);
+
+    if (!doc["enabled"].isNull()) {
+      work.enabled = (doc["enabled"] | false) ? 1 : 0;
+    }
+    if (!doc["autoLocation"].isNull()) {
+      work.autoLocation = (doc["autoLocation"] | false) ? 1 : 0;
+    }
+    if (!doc["unitsF"].isNull()) {
+      work.unitsF = (doc["unitsF"] | false) ? 1 : 0;
+    }
+    if (!doc["latitude"].isNull() || !doc["longitude"].isNull()) {
+      const char *latText = doc["latitude"] | "";
+      const char *lonText = doc["longitude"] | "";
+      if (!*latText && !*lonText) {
+        work.latitudeE6 = kWeatherCoordUnset;
+        work.longitudeE6 = kWeatherCoordUnset;
+      } else {
+        float lat;
+        float lon;
+        int32_t latE6;
+        int32_t lonE6;
+        if (!parseFloatText(latText, lat) || !parseFloatText(lonText, lon) ||
+            !normalizeWeatherCoord(lat, lon, latE6, lonE6)) return false;
+        work.latitudeE6 = latE6;
+        work.longitudeE6 = lonE6;
+      }
+    }
+
+    publishWeatherPending(work);
+    JsonDocument echo;
+    writeWeatherMessage(echo, work, "client");
+    echo["from"] = client->id();
+    String out;
+    serializeJson(echo, out);
+    gWs.textAll(out);
+    return true;
+  }
+
   if (strcmp(type, "action") == 0) {
     const char *action = doc["action"] | "";
     if (strcmp(action, "reseed") == 0) { gReqReseed = true; return true; }
@@ -565,30 +1036,38 @@ bool dispatchWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t
     if (strcmp(action, "forget") == 0) { gReqForget = true; return true; }
     if (strcmp(action, "clockMinute") == 0) { gReqClockAnimation = kClockAnimationRequestMinute; return true; }
     if (strcmp(action, "clockHour") == 0)   { gReqClockAnimation = kClockAnimationRequestHour; return true; }
-    if (strcmp(action, "detectTimezone") == 0) { clockRequestDetect(/*saveDetected=*/false); return true; }
+    if (strcmp(action, "detectTimezone") == 0) { locationRequestDetect(/*saveDetected=*/false, true, false); return true; }
+    if (strcmp(action, "detectWeather") == 0) { weatherRequestDetect(/*saveDetected=*/false); return true; }
+    if (strcmp(action, "refreshWeather") == 0) { weatherRequestRefresh(); return true; }
     if (strcmp(action, "save") == 0) {
       LifeSettings cur;
       ClockSettings clock;
+      WeatherSettings weather;
       taskENTER_CRITICAL(&gSettingsMux);
       cur = gPending;
       clock = gClockPending;
+      weather = gWeatherPending;
       taskEXIT_CRITICAL(&gSettingsMux);
       settingsSaveToNvs(cur);
       clockSaveToNvs(clock);
+      weatherSaveToNvs(weather);
       broadcastSchema();
       return true;
     }
     if (strcmp(action, "revert") == 0) {
       ClockSettings clockSaved;
+      WeatherSettings weatherSaved;
       taskENTER_CRITICAL(&gSettingsMux);
       clockSaved = gClockSaved;
+      weatherSaved = gWeatherSaved;
       taskEXIT_CRITICAL(&gSettingsMux);
       publishPending(gSaved);
       publishClockPending(clockSaved);
+      publishWeatherPending(weatherSaved);
       broadcastSchema();
       return true;
     }
-    if (strcmp(action, "reset") == 0)  { publishPending(gDefaults); publishClockPending(gClockDefaults); broadcastSchema(); return true; }
+    if (strcmp(action, "reset") == 0)  { publishPending(gDefaults); publishClockPending(gClockDefaults); publishWeatherPending(gWeatherDefaults); broadcastSchema(); return true; }
   }
   return false;
 }
@@ -631,7 +1110,7 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
     }
     case WS_EVT_DATA: {
       AwsFrameInfo *info = (AwsFrameInfo *)arg;
-      // Complete single frames only. Text → JSON control (≤256 B cap); binary → drawn cells
+      // Complete single frames only. Text → JSON control (≤512 B cap); binary → drawn cells
       // (≤max-panel cap). Reject oversized/fragmented frames before parsing.
       if (info->final && info->index == 0 && info->len == len) {
         if (info->opcode == WS_TEXT && len <= kMaxWsFrameBytes) {
@@ -738,6 +1217,8 @@ void webServerStart() {
   gPendingDirty = false;
   gClockPending = gClockLive;
   gClockPendingDirty = false;
+  gWeatherPending = gWeatherLive;
+  gWeatherPendingDirty = false;
   taskEXIT_CRITICAL(&gSettingsMux);
 
   gServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -770,6 +1251,17 @@ void webPortalTick() {
     clockApplyTimezone(gClockLive.timezone);
   }
 
+  if (gWeatherPendingDirty) {
+    WeatherSettings next;
+    taskENTER_CRITICAL(&gSettingsMux);
+    next = gWeatherPending;
+    gWeatherPendingDirty = false;
+    taskEXIT_CRITICAL(&gSettingsMux);
+    gWeatherLive = next;
+    weatherSyncSnapshotSettings(gWeatherLive);
+    weatherRequestRefresh();
+  }
+
   // Drain a staged browser-drawn frame: apply FIRST (read the buffer), then release it by
   // clearing the flag — so core 0 only refills gDrawBitmask once we are done reading.
   bool doDraw;
@@ -780,6 +1272,44 @@ void webPortalTick() {
   }
 }
 
+bool weatherCopySnapshot(WeatherSnapshot &out) {
+  taskENTER_CRITICAL(&gSettingsMux);
+  out = gWeatherSnapshot;
+  taskEXIT_CRITICAL(&gSettingsMux);
+  return out.enabled && out.valid;
+}
+
+void weatherRequestRefresh() {
+  WeatherSettings settings;
+  WeatherSnapshot snapshot;
+  uint32_t lastFetchAt;
+  int32_t lastLatE6;
+  int32_t lastLonE6;
+  taskENTER_CRITICAL(&gSettingsMux);
+  settings = gWeatherLive;
+  snapshot = gWeatherSnapshot;
+  lastFetchAt = gWeatherLastFetchAt;
+  lastLatE6 = gWeatherLastLatE6;
+  lastLonE6 = gWeatherLastLonE6;
+  taskEXIT_CRITICAL(&gSettingsMux);
+
+  weatherSyncSnapshotSettings(settings);
+  if (!settings.enabled || !weatherHasLocation(settings)) return;
+  uint32_t now = millis();
+  if (snapshot.valid && lastFetchAt != 0 && now - lastFetchAt < kWeatherCacheMs &&
+      snapshot.unitsF == (settings.unitsF != 0) && lastLatE6 == settings.latitudeE6 &&
+      lastLonE6 == settings.longitudeE6) {
+    return;
+  }
+  if (gWeatherFetchTask) return;
+  BaseType_t created = xTaskCreatePinnedToCore(weatherFetchTask, "weather", 8192,
+                                               nullptr, 1, &gWeatherFetchTask, 0);
+  if (created != pdPASS) {
+    gWeatherFetchTask = nullptr;
+    setWeatherInvalidStatus("weather fetch unavailable");
+  }
+}
+
 #else  // not S3 / benchmark build: portal compiles to nothing.
 // LifeSettings is available via web_portal.h (included above).
 void webPortalBegin() {}
@@ -787,4 +1317,6 @@ void settingsLoadFromNvs() {}
 void settingsSaveToNvs(const LifeSettings &) {}
 void settingsClearNvs() {}
 void webPortalTick() {}
+bool weatherCopySnapshot(WeatherSnapshot &out) { out = {}; return false; }
+void weatherRequestRefresh() {}
 #endif

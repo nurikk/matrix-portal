@@ -30,6 +30,8 @@ constexpr uint8_t kClockMinuteScheduleInterval = 5;
 constexpr time_t kClockValidEpoch = 1609459200;   // before 2021 means SNTP has not synced yet
 
 ClockAnimationState gClockAnimation = {};
+WeatherSnapshot gClockWeather = {};
+bool gClockWeatherValid = false;
 uint32_t gClockLastEpochSecond = 0;
 uint32_t gClockSecondStartedAt = 0;
 uint32_t gClockLastScheduledMinuteId = 0;
@@ -55,6 +57,8 @@ const int8_t kClockCos12[12] = {127, 110, 64, 0, -64, -110, -127, -110, -64, 0, 
 bool clockFacePixel(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
                     uint8_t x, uint8_t y, Hsv &hsv);
 void precomputeClockFace();
+int16_t clockPointX(int16_t cx, uint8_t radius, uint8_t tick);
+int16_t clockPointY(int16_t cy, uint8_t radius, uint8_t tick);
 
 uint16_t clockMinDimension() {
   return panelWidth < panelHeight ? panelWidth : panelHeight;
@@ -134,6 +138,12 @@ bool beginClockAnimation(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
   gClockAnimation.endsAt = endsAt;
   gClockAnimation.active = true;
   gClockAnimation.finalRendered = false;
+  if (kind == kClockAnimationHour) {
+    weatherRequestRefresh();
+    gClockWeatherValid = weatherCopySnapshot(gClockWeather);
+  } else {
+    gClockWeatherValid = false;
+  }
   precomputeClockFace();
   return true;
 }
@@ -348,6 +358,133 @@ bool clockDigitalPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &
   return false;
 }
 
+uint8_t clockGlyphRows(char c, uint8_t row) {
+  if (row > 4) return 0;
+  if (c >= '0' && c <= '9') return kClockDigitRows[c - '0'][row];
+  switch (c) {
+  case ' ': return 0;
+  case ':': return (row == 1 || row == 3) ? 0b010 : 0;
+  case '-': return row == 2 ? 0b111 : 0;
+  case '%': {
+    const uint8_t rows[5] = {0b101, 0b001, 0b010, 0b100, 0b101};
+    return rows[row];
+  }
+  case 'A': {
+    const uint8_t rows[5] = {0b010, 0b101, 0b111, 0b101, 0b101};
+    return rows[row];
+  }
+  case 'C':
+  case 'c': {
+    const uint8_t rows[5] = {0b111, 0b100, 0b100, 0b100, 0b111};
+    return rows[row];
+  }
+  case 'D': {
+    const uint8_t rows[5] = {0b110, 0b101, 0b101, 0b101, 0b110};
+    return rows[row];
+  }
+  case 'E': {
+    const uint8_t rows[5] = {0b111, 0b100, 0b110, 0b100, 0b111};
+    return rows[row];
+  }
+  case 'F': {
+    const uint8_t rows[5] = {0b111, 0b100, 0b110, 0b100, 0b100};
+    return rows[row];
+  }
+  case 'G': {
+    const uint8_t rows[5] = {0b111, 0b100, 0b101, 0b101, 0b111};
+    return rows[row];
+  }
+  case 'H': {
+    const uint8_t rows[5] = {0b101, 0b101, 0b111, 0b101, 0b101};
+    return rows[row];
+  }
+  case 'I': {
+    const uint8_t rows[5] = {0b111, 0b010, 0b010, 0b010, 0b111};
+    return rows[row];
+  }
+  case 'L': {
+    const uint8_t rows[5] = {0b100, 0b100, 0b100, 0b100, 0b111};
+    return rows[row];
+  }
+  case 'N': {
+    const uint8_t rows[5] = {0b101, 0b111, 0b111, 0b111, 0b101};
+    return rows[row];
+  }
+  case 'O': {
+    const uint8_t rows[5] = {0b111, 0b101, 0b101, 0b101, 0b111};
+    return rows[row];
+  }
+  case 'R': {
+    const uint8_t rows[5] = {0b110, 0b101, 0b110, 0b101, 0b101};
+    return rows[row];
+  }
+  case 'S': {
+    const uint8_t rows[5] = {0b111, 0b100, 0b111, 0b001, 0b111};
+    return rows[row];
+  }
+  case 'W': {
+    const uint8_t rows[5] = {0b101, 0b101, 0b101, 0b111, 0b101};
+    return rows[row];
+  }
+  case 'X': {
+    const uint8_t rows[5] = {0b101, 0b101, 0b010, 0b101, 0b101};
+    return rows[row];
+  }
+  default:
+    return 0;
+  }
+}
+
+uint8_t clockTextLen(const char *text) {
+  uint8_t n = 0;
+  while (text[n] && n < 17) n++;
+  return n;
+}
+
+uint16_t clockTextWidth(const char *text, uint8_t scale) {
+  uint8_t n = clockTextLen(text);
+  return n == 0 ? 0 : static_cast<uint16_t>((n * 4 - 1) * scale);
+}
+
+bool clockTextPixel(const char *text, int16_t ox, int16_t oy, uint8_t scale,
+                    uint8_t x, uint8_t y) {
+  if (x < ox || y < oy || scale == 0) return false;
+  int16_t lx = x - ox;
+  int16_t ly = y - oy;
+  if (ly >= 5 * scale) return false;
+  uint8_t col = lx / scale;
+  uint8_t row = ly / scale;
+  uint8_t glyph = col / 4;
+  uint8_t glyphCol = col % 4;
+  if (glyphCol > 2 || glyph >= clockTextLen(text)) return false;
+  return clockGlyphRows(text[glyph], row) & (1 << (2 - glyphCol));
+}
+
+int16_t clockRoundedWeatherTemp(const WeatherSnapshot &w) {
+  int16_t t = w.temperatureTenths;
+  return static_cast<int16_t>((t + (t >= 0 ? 5 : -5)) / 10);
+}
+
+int16_t clockRoundedTenths(int16_t tenths) {
+  return static_cast<int16_t>((tenths + (tenths >= 0 ? 5 : -5)) / 10);
+}
+
+uint16_t clockRoundedUnsignedTenths(uint16_t tenths) {
+  return static_cast<uint16_t>((tenths + 5) / 10);
+}
+
+uint8_t clockWeatherTempHue(const WeatherSnapshot &w) {
+  int16_t t = clockRoundedWeatherTemp(w);
+  if (w.unitsF) {
+    if (t <= 40) return 154;
+    if (t >= 82) return 6;
+  } else {
+    if (t <= 5) return 154;
+    if (t >= 28) return 6;
+  }
+  return 52;
+}
+
 uint8_t clockMinuteColonScale(uint32_t elapsedMs) {
   uint16_t phase = elapsedMs % 1000;
   if (phase < 420) return 255;
@@ -445,6 +582,176 @@ bool clockRingPixel(uint8_t x, uint8_t y, int16_t cx, int16_t cy,
   int32_t band = 2L * radius * thickness + thickness * thickness;
   int32_t delta = d2 > r2 ? d2 - r2 : r2 - d2;
   return delta <= band;
+}
+
+bool clockWeatherRainCode(uint8_t code) {
+  return (code >= 51 && code <= 67) || (code >= 80 && code <= 82);
+}
+
+bool clockWeatherSnowCode(uint8_t code) {
+  return code >= 71 && code <= 77;
+}
+
+bool clockWeatherStormCode(uint8_t code) {
+  return code >= 95;
+}
+
+bool clockWeatherCloudCode(uint8_t code) {
+  return code >= 2 && code <= 48;
+}
+
+bool clockWeatherIconPixel(uint8_t x, uint8_t y, Hsv &hsv) {
+  uint16_t md = clockMinDimension();
+  int16_t cx = panelWidth / 3;
+  int16_t cy = (panelHeight * 35) / 100;
+  uint8_t r = md / 12;
+  if (r < 4) r = 4;
+  uint8_t code = gClockWeatherValid ? gClockWeather.weatherCode : 3;
+
+  if (clockWeatherRainCode(code)) {
+    if (clockDiscPixel(x, y, cx - r / 2, cy - r / 3, r / 2) ||
+        clockDiscPixel(x, y, cx + r / 5, cy - r / 2, (r * 3) / 5) ||
+        clockDiscPixel(x, y, cx + r / 2, cy - r / 5, r / 2) ||
+        (y >= cy - r / 4 && y <= cy + r / 5 && absDiff16(x, cx) <= r)) {
+      hsv = {156, 120, 180};
+      return true;
+    }
+    for (int8_t i = -1; i <= 1; i++) {
+      int16_t sx = cx + i * (r / 2);
+      if (clockNearLine(x, y, sx, cy + r / 2, sx - r / 4, cy + r + 2, 1)) {
+        hsv = {146, 210, 235};
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (clockWeatherSnowCode(code)) {
+    for (int8_t i = -1; i <= 1; i++) {
+      int16_t px = cx + i * (r / 2);
+      int16_t py = cy + ((i & 1) ? -r / 4 : r / 4);
+      if (clockDiscPixel(x, y, px, py, md >= 96 ? 2 : 1) ||
+          clockNearLine(x, y, px - r / 5, py, px + r / 5, py, 1) ||
+          clockNearLine(x, y, px, py - r / 5, px, py + r / 5, 1)) {
+        hsv = {142, 80, 245};
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (clockWeatherStormCode(code)) {
+    int16_t x0 = cx - r / 5;
+    int16_t y0 = cy - r;
+    if ((x >= x0 && x <= x0 + r / 2 && y >= y0 && y <= y0 + r / 2) ||
+        clockNearLine(x, y, cx + r / 3, cy - r / 2, cx - r / 5, cy + r / 5, 2) ||
+        clockNearLine(x, y, cx - r / 5, cy + r / 5, cx + r / 5, cy + r / 5, 2) ||
+        clockNearLine(x, y, cx + r / 5, cy + r / 5, cx - r / 3, cy + r, 2)) {
+      hsv = {28, 235, 250};
+      return true;
+    }
+    return false;
+  }
+
+  if (code <= 1) {
+    if (clockRingPixel(x, y, cx, cy, r, 1) || clockDiscPixel(x, y, cx, cy, r / 2)) {
+      hsv = {28, 220, 245};
+      return true;
+    }
+    for (uint8_t i = 0; i < 8; i++) {
+      uint8_t tick = i * 60 / 8;
+      if (clockNearLine(x, y, clockPointX(cx, r + 2, tick), clockPointY(cy, r + 2, tick),
+                        clockPointX(cx, r + r / 2, tick), clockPointY(cy, r + r / 2, tick), 1)) {
+        hsv = {24, 200, 210};
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (clockWeatherCloudCode(code) || !gClockWeatherValid) {
+    if (clockDiscPixel(x, y, cx - r / 2, cy, r / 2) ||
+        clockDiscPixel(x, y, cx, cy - r / 3, (r * 2) / 3) ||
+        clockDiscPixel(x, y, cx + r / 2, cy, r / 2) ||
+        (y >= cy && y <= cy + r / 3 && absDiff16(x, cx) <= r)) {
+      hsv = {166, 85, static_cast<uint8_t>(gClockWeatherValid ? 205 : 120)};
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool clockWeatherPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &hsv) {
+  char timeText[6];
+  snprintf(timeText, sizeof(timeText), "%02u:%02u", hour, minute);
+
+  char tempText[8];
+  if (gClockWeatherValid) {
+    snprintf(tempText, sizeof(tempText), "%d%c", clockRoundedWeatherTemp(gClockWeather),
+             gClockWeather.unitsF ? 'F' : 'c');
+  } else {
+    snprintf(tempText, sizeof(tempText), "WX");
+  }
+
+  uint16_t md = clockMinDimension();
+  uint8_t timeScale = md >= 96 ? 3 : 2;
+  uint8_t tempScale = md >= 96 ? 3 : 2;
+  int16_t timeX = (static_cast<int16_t>(panelWidth) - clockTextWidth(timeText, timeScale)) / 2;
+  int16_t timeY = md >= 96 ? 8 : 3;
+  int16_t tempCenterX = (panelWidth * 72) / 100;
+  int16_t tempX = tempCenterX - clockTextWidth(tempText, tempScale) / 2;
+  int16_t tempY = (panelHeight * 35) / 100 - (5 * tempScale) / 2;
+
+  if (clockTextPixel(timeText, timeX, timeY, timeScale, x, y)) {
+    hsv = {146, 190, 235};
+    return true;
+  }
+  if (clockTextPixel(tempText, tempX, tempY, tempScale, x, y)) {
+    hsv = {static_cast<uint8_t>(gClockWeatherValid ? clockWeatherTempHue(gClockWeather) : 172),
+           static_cast<uint8_t>(gClockWeatherValid ? 230 : 120),
+           static_cast<uint8_t>(gClockWeatherValid ? 252 : 130)};
+    return true;
+  }
+  if (gClockWeatherValid) {
+    char feelsText[12];
+    char rainText[10];
+    char windText[10];
+    char highLowText[18];
+    snprintf(feelsText, sizeof(feelsText), "FEELS %d%c",
+             clockRoundedTenths(gClockWeather.apparentTemperatureTenths),
+             gClockWeather.unitsF ? 'F' : 'c');
+    snprintf(rainText, sizeof(rainText), "RAIN %u%%", gClockWeather.precipitationProbability);
+    snprintf(windText, sizeof(windText), "WIND %u",
+             clockRoundedUnsignedTenths(gClockWeather.windSpeedTenths));
+    snprintf(highLowText, sizeof(highLowText), "HIGH %d LOW %d",
+             clockRoundedTenths(gClockWeather.highTemperatureTenths),
+             clockRoundedTenths(gClockWeather.lowTemperatureTenths));
+    uint8_t metricScale = md >= 96 ? 2 : 1;
+    int16_t gap = metricScale * 3;
+    int16_t metricsY = panelHeight - (4 * 5 * metricScale + 3 * gap + 2);
+    int16_t feelsX = (static_cast<int16_t>(panelWidth) - clockTextWidth(feelsText, metricScale)) / 2;
+    int16_t rainX = (static_cast<int16_t>(panelWidth) - clockTextWidth(rainText, metricScale)) / 2;
+    int16_t windX = (static_cast<int16_t>(panelWidth) - clockTextWidth(windText, metricScale)) / 2;
+    int16_t highLowX = (static_cast<int16_t>(panelWidth) - clockTextWidth(highLowText, metricScale)) / 2;
+    if (clockTextPixel(feelsText, feelsX, metricsY, metricScale, x, y)) {
+      hsv = {92, 165, 210};
+      return true;
+    }
+    if (clockTextPixel(rainText, rainX, metricsY + 5 * metricScale + gap, metricScale, x, y)) {
+      hsv = {146, 190, 230};
+      return true;
+    }
+    if (clockTextPixel(windText, windX, metricsY + 10 * metricScale + 2 * gap, metricScale, x, y)) {
+      hsv = {174, 145, 220};
+      return true;
+    }
+    if (clockTextPixel(highLowText, highLowX, metricsY + 15 * metricScale + 3 * gap, metricScale, x, y)) {
+      hsv = {28, 190, 225};
+      return true;
+    }
+  }
+  return clockWeatherIconPixel(x, y, hsv);
 }
 
 uint8_t clockAnalogRadius(uint16_t md) {
@@ -633,8 +940,6 @@ uint8_t clockHourSweepValue(uint8_t x, uint8_t y, const ClockHourRenderState &st
 uint16_t clockHourAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
                                 bool targetPixel, uint8_t targetWeight,
                                 uint8_t easedProgress, const ClockHourRenderState &state) {
-  uint8_t sweep = clockHourSweepValue(x, y, state);
-
   if (targetPixel) {
     uint8_t hue = nextHue[index];
     uint8_t sat = nextSat[index];
@@ -642,38 +947,35 @@ uint16_t clockHourAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
     uint8_t shimmer = triWave6(state.elapsedMs / 48 + x * 2 + y * 3) * 2;
 
     value = addSaturated(value, shimmer);
-    if (sweep) {
-      hue = wrapHue(4 + (sweep >> 3));
-      sat = 230;
-      value = addSaturated(value, sweep >> 1);
-    }
+    hue = wrapHue(hue + (shimmer >> 4));
 
     return hsv565(hue, sat, (static_cast<uint16_t>(value) * targetWeight) / 255);
   }
 
-  uint8_t accent = sweep;
-  uint8_t hue = sweep ? 6 : 176;
-  if (clockRingPixel(x, y, state.cx, state.cy, state.radius + 1, state.md / 96 + 1)) {
-    uint8_t ring = 26 + triWave6(state.elapsedMs / 70 + x + y);
-    if (ring > accent) {
-      accent = ring;
-      hue = wrapHue(168 + state.elapsedMs / 64);
-    }
-  }
-  if (clockRingPixel(x, y, state.cx, state.cy, (state.radius * 72) / 100, 1)) {
-    uint8_t inner = 16 + triWave6(state.elapsedMs / 58 + x * 3);
-    if (inner > accent) {
-      accent = inner;
-      hue = 196;
-    }
-  }
-
+  uint8_t code = gClockWeatherValid ? gClockWeather.weatherCode : 3;
+  uint8_t accent = 0;
+  uint8_t hue = clockWeatherRainCode(code) ? 146 : (clockWeatherSnowCode(code) ? 138 : 176);
   uint16_t hash = clockPixelHash(x, y, gClockAnimation.eventMinuteId ^ 0xA5A5A5A5UL);
-  if ((hash & 0xFF) == ((state.elapsedMs / 45) & 0xFF)) {
-    uint8_t spark = 38 + triWave6((state.elapsedMs / 18 + (hash >> 8)) & 63);
-    if (spark > accent) {
-      accent = spark;
-      hue = wrapHue(32 + (hash >> 5));
+  if (clockWeatherRainCode(code)) {
+    uint8_t phase = (state.elapsedMs / 42 + (hash & 31)) & 31;
+    if (((x + phase) & 15) == 0 && y > panelHeight / 3) {
+      accent = 70 + triWave6((y + phase) & 63);
+      hue = 146;
+    }
+  } else if (clockWeatherSnowCode(code)) {
+    if (((hash + state.elapsedMs / 70) & 0x7F) == 0) {
+      accent = 88;
+      hue = 138;
+    }
+  } else if (clockWeatherStormCode(code)) {
+    if ((hash & 0x1FF) == ((state.elapsedMs / 35) & 0x1FF)) {
+      accent = 130;
+      hue = 30;
+    }
+  } else {
+    if ((hash & 0x1FF) == ((state.elapsedMs / 55) & 0x1FF)) {
+      accent = 44 + triWave6((state.elapsedMs / 22 + (hash >> 8)) & 63);
+      hue = wrapHue(150 + (hash >> 5));
     }
   }
 
@@ -682,7 +984,7 @@ uint16_t clockHourAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
   }
 
   accent = (static_cast<uint16_t>(accent) * easedProgress) / 255;
-  return hsv565(hue, sweep ? 225 : 185, accent);
+  return hsv565(hue, 185, accent);
 }
 
 bool clockFacePixel(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
@@ -692,7 +994,7 @@ bool clockFacePixel(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
   }
 
   if (kind == kClockAnimationHour) {
-    return clockAnalogPixel(hour, minute, x, y, hsv);
+    return clockWeatherPixel(hour, minute, x, y, hsv);
   }
 
   return false;

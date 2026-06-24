@@ -762,6 +762,11 @@
             margin-top: 4px;
         }
 
+        .device-actions.weather-actions {
+            grid-template-columns: repeat(2, 1fr);
+            margin-top: 4px;
+        }
+
         .clock-animation-actions {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -804,6 +809,27 @@
 
         .clock-grid.changed .text {
             border-color: rgba(52, 227, 155, .42);
+        }
+
+        .weather-grid {
+            display: grid;
+            gap: 9px;
+        }
+
+        .weather-grid.changed .text {
+            border-color: rgba(52, 227, 155, .42);
+        }
+
+        .coord-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 9px;
+        }
+
+        @media (max-width: 430px) {
+            .coord-grid {
+                grid-template-columns: 1fr;
+            }
         }
 
         .checkline {
@@ -1001,6 +1027,30 @@
 
                 <div class="hr"></div>
 
+                <p class="panel-label">Weather <span class="hint" id="weatherState">not fetched</span></p>
+                <div class="weather-grid" id="weatherBox">
+                    <label class="checkline"><input type="checkbox" id="wxEnabled"> Show weather on hourly screen</label>
+                    <label class="checkline"><input type="checkbox" id="wxAuto"> Auto-detect location by IP</label>
+                    <div class="coord-grid">
+                        <div>
+                            <label class="field-label" for="wxLat">Latitude</label>
+                            <input class="text" id="wxLat" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="51.5074">
+                        </div>
+                        <div>
+                            <label class="field-label" for="wxLon">Longitude</label>
+                            <input class="text" id="wxLon" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="-0.1278">
+                        </div>
+                    </div>
+                    <label class="checkline"><input type="checkbox" id="wxUnitsF"> Fahrenheit</label>
+                    <div class="device-actions weather-actions">
+                        <button class="btn" type="button" onclick="detectWeather()">Detect location</button>
+                        <button class="btn" type="button" onclick="refreshWeather()">Refresh now</button>
+                    </div>
+                    <p class="device-note" id="weatherNote">Open-Meteo current weather, using IP-based latitude/longitude unless overridden.</p>
+                </div>
+
+                <div class="hr"></div>
+
                 <p class="panel-label">Device</p>
                 <dl class="spec-list" id="specList"></dl>
                 <button class="btn btn--danger" type="button" style="width:100%" onclick="forget()" aria-describedby="forgetNote">Forget WiFi</button>
@@ -1035,8 +1085,18 @@
             const tz = $('tzInput').value.trim();
             if (tz) send({ type: 'clock', timezone: tz, autoTimezone: $('tzAuto').checked });
         }, 180);
+        const sendWeather = debounce(() => send({
+            type: 'weather',
+            enabled: $('wxEnabled').checked,
+            autoLocation: $('wxAuto').checked,
+            unitsF: $('wxUnitsF').checked,
+            latitude: $('wxLat').value.trim(),
+            longitude: $('wxLon').value.trim()
+        }), 180);
         function act(action) { send({ type: 'action', action }); }
         function detectTimezone() { act('detectTimezone'); }
+        function detectWeather() { act('detectWeather'); }
+        function refreshWeather() { act('refreshWeather'); }
         function forget() { if (confirm('Erase WiFi credentials and reboot into Bluetooth setup?')) act('forget'); }
 
         function setConn(state) {
@@ -1084,6 +1144,7 @@
                 ['Bit depth', `${data.geometry.bitDepth}-bit`],
                 ['Tile', `${data.geometry.tile}`],
                 ['Timezone', data.clock ? data.clock.timezone : 'UTC'],
+                ['Weather', data.weather ? data.weather.provider : 'Open-Meteo'],
                 ['Address', location.host || 'matrixportal.local'],
             ];
             specRows.forEach(([k, v]) => { sl.append(el('dt', {}, k), el('dd', {}, v)); });
@@ -1128,6 +1189,7 @@
                 }
             }
             if (data.clock) buildClock(data.clock);
+            if (data.weather) buildWeather(data.weather);
             refreshDirty();
         }
 
@@ -1153,6 +1215,66 @@
             if (c.detectedTimezone) bits.push(`Detected: ${c.detectedTimezone}.`);
             if (c.posix) bits.push(`POSIX: ${c.posix}.`);
             $('clockNote').textContent = bits.join(' ');
+        }
+
+        function buildWeather(w) {
+            const box = $('weatherBox'), en = $('wxEnabled'), auto = $('wxAuto'), units = $('wxUnitsF'), lat = $('wxLat'), lon = $('wxLon');
+            en.checked = !!w.enabled;
+            auto.checked = !!w.autoLocation;
+            units.checked = !!w.unitsF;
+            lat.value = w.latitude || '';
+            lon.value = w.longitude || '';
+            savedVals.weatherEnabled = w.savedEnabled ? 1 : 0;
+            savedVals.weatherAutoLocation = w.savedAutoLocation ? 1 : 0;
+            savedVals.weatherUnitsF = w.savedUnitsF ? 1 : 0;
+            savedVals.weatherLatitude = w.savedLatitude || '';
+            savedVals.weatherLongitude = w.savedLongitude || '';
+            controls.weatherEnabled = { kind: 'bool', read: () => en.checked ? 1 : 0, setVal: v => en.checked = !!v, knob: box };
+            controls.weatherAutoLocation = { kind: 'bool', read: () => auto.checked ? 1 : 0, setVal: v => auto.checked = !!v, knob: box };
+            controls.weatherUnitsF = { kind: 'bool', read: () => units.checked ? 1 : 0, setVal: v => units.checked = !!v, knob: box };
+            controls.weatherLatitude = { kind: 'text', read: () => lat.value.trim(), setVal: v => lat.value = v || '', knob: box };
+            controls.weatherLongitude = { kind: 'text', read: () => lon.value.trim(), setVal: v => lon.value = v || '', knob: box };
+            en.onchange = () => { sendWeather(); refreshDirty(); };
+            units.onchange = () => { sendWeather(); refreshWeather(); refreshDirty(); };
+            auto.onchange = () => { sendWeather(); if (auto.checked) detectWeather(); refreshDirty(); };
+            lat.oninput = () => { auto.checked = false; sendWeather(); refreshDirty(); };
+            lon.oninput = () => { auto.checked = false; sendWeather(); refreshDirty(); };
+            lat.onchange = lon.onchange = () => { sendWeather(); refreshDirty(); };
+            updateWeather(w);
+        }
+
+        function weatherTempText(w) {
+            if (!w || !w.valid || typeof w.temperatureTenths !== 'number') return '';
+            const v = Math.round(w.temperatureTenths / 10);
+            return `${v}°${w.unitsF ? 'F' : 'c'}`;
+        }
+
+        function weatherRounded(w, key) {
+            return (w && typeof w[key] === 'number') ? Math.round(w[key] / 10) : null;
+        }
+
+        function updateWeather(w) {
+            if (!w) return;
+            const temp = weatherTempText(w);
+            $('weatherState').textContent = temp || w.status || 'not fetched';
+            const bits = [`${w.provider || 'Open-Meteo'} current weather.`];
+            if (w.city) bits.push(`Location: ${w.city}.`);
+            else if (w.latitude && w.longitude) bits.push(`Location: ${w.latitude}, ${w.longitude}.`);
+            if (temp) bits.push(`Now: ${temp}, code ${w.weatherCode}.`);
+            if (w.valid) {
+                const unit = w.unitsF ? 'F' : 'c';
+                const feels = weatherRounded(w, 'apparentTemperatureTenths');
+                const hi = weatherRounded(w, 'highTemperatureTenths');
+                const lo = weatherRounded(w, 'lowTemperatureTenths');
+                const wind = weatherRounded(w, 'windSpeedTenths');
+                const windUnit = w.unitsF ? 'mph' : 'km/h';
+                if (feels !== null) bits.push(`Feels ${feels}°${unit}.`);
+                if (typeof w.precipitationProbability === 'number') bits.push(`Rain ${w.precipitationProbability}%.`);
+                if (wind !== null) bits.push(`Wind ${wind} ${windUnit}.`);
+                if (hi !== null && lo !== null) bits.push(`High/low ${hi}°/${lo}°${unit}.`);
+            }
+            if (w.status) bits.push(w.status + '.');
+            $('weatherNote').textContent = bits.join(' ');
         }
 
         function buildKnob(f) {
@@ -1206,6 +1328,16 @@
             refreshDirty();
         }
 
+        function applyRemoteWeather(m) {
+            if (controls.weatherEnabled && typeof m.enabled === 'boolean') controls.weatherEnabled.setVal(m.enabled ? 1 : 0);
+            if (controls.weatherAutoLocation && typeof m.autoLocation === 'boolean') controls.weatherAutoLocation.setVal(m.autoLocation ? 1 : 0);
+            if (controls.weatherUnitsF && typeof m.unitsF === 'boolean') controls.weatherUnitsF.setVal(m.unitsF ? 1 : 0);
+            if (controls.weatherLatitude && typeof m.latitude === 'string') controls.weatherLatitude.setVal(m.latitude);
+            if (controls.weatherLongitude && typeof m.longitude === 'string') controls.weatherLongitude.setVal(m.longitude);
+            updateWeather(m);
+            refreshDirty();
+        }
+
         // ============================================================
         // Live telemetry: readouts + the population sparkline (the signature)
         // ============================================================
@@ -1245,6 +1377,7 @@
                 $('link').title = `${s.frameBytes} B/frame vs ${raw} B raw — ${saved}% saved by ${enc}`;
             }
             if (s.clock) updateClock(s.clock);
+            if (s.weather) updateWeather(s.weather);
             pushPop(s.live);
             // Trust the firmware's authoritative pause flag, except in the brief window right
             // after a click (syncHoldUntil) where a stale in-flight frame could lie.
@@ -1472,6 +1605,7 @@
             else if (m.type === 'stats') showStats(m);
             else if (m.type === 'set') { if (m.from !== myClientId) applyRemoteSet(m.key, m.value); }
             else if (m.type === 'clock') { if (m.from !== myClientId) applyRemoteClock(m); }
+            else if (m.type === 'weather') { if (m.from !== myClientId) applyRemoteWeather(m); }
         }
 
         function connect() {
