@@ -26,11 +26,16 @@ struct ClockAnimationState {
 
 constexpr uint16_t kClockMinuteAnimationMs = 2000;
 constexpr uint16_t kClockHourAnimationMs = 12000;
+constexpr uint16_t kClockWeatherMoveMs = 3800;
+constexpr uint16_t kClockWeatherFadeMs = 1800;
+constexpr uint8_t kClockWeatherFadeColorStep = 12;
 constexpr uint16_t kClockPostAnimationHoldMs = 5000;
 constexpr uint8_t kClockMinuteScheduleInterval = 5;
 constexpr time_t kClockValidEpoch = 1609459200;   // before 2021 means SNTP has not synced yet
 
 ClockAnimationState gClockAnimation = {};
+uint16_t gClockMoveSourceCount = 0;
+uint16_t gClockMoveTargetCount = 0;
 WeatherSnapshot gClockWeather = {};
 bool gClockWeatherValid = false;
 uint32_t gClockLastEpochSecond = 0;
@@ -58,6 +63,7 @@ const int8_t kClockCos12[12] = {127, 110, 64, 0, -64, -110, -127, -110, -64, 0, 
 bool clockFacePixel(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
                     uint8_t x, uint8_t y, Hsv &hsv);
 void precomputeClockFace();
+void prepareClockWeatherMoveTransition();
 int16_t clockPointX(int16_t cx, uint8_t radius, uint8_t tick);
 int16_t clockPointY(int16_t cy, uint8_t radius, uint8_t tick);
 
@@ -72,6 +78,11 @@ uint8_t clockSmoothstep8(uint8_t t) {
 
 uint8_t clockClamp8(uint16_t value) {
   return value > 255 ? 255 : value;
+}
+
+uint8_t clockLerp8(uint8_t from, uint8_t to, uint8_t amount) {
+  int16_t delta = static_cast<int16_t>(to) - from;
+  return static_cast<uint8_t>(from + (static_cast<int32_t>(delta) * amount) / 255);
 }
 
 uint8_t clockAbsDiff8(uint8_t a, uint8_t b) {
@@ -147,6 +158,7 @@ bool beginClockAnimation(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
     gClockWeatherValid = false;
   }
   precomputeClockFace();
+  prepareClockWeatherMoveTransition();
   return true;
 }
 
@@ -272,6 +284,65 @@ uint8_t clockAnimationProgress(uint32_t nowMs) {
     return 255;
   }
   return static_cast<uint8_t>((elapsed * 255UL) / gClockAnimation.durationMs);
+}
+
+uint16_t clockWeatherMoveDurationMs() {
+  return gClockAnimation.durationMs < kClockWeatherMoveMs ? gClockAnimation.durationMs
+                                                          : kClockWeatherMoveMs;
+}
+
+bool clockWeatherMoveTransitionActive(uint32_t nowMs) {
+  if (gClockAnimation.kind != kClockAnimationHour || gClockMoveSourceCount == 0 ||
+      gClockMoveTargetCount == 0) {
+    return false;
+  }
+  uint16_t durationMs = clockWeatherMoveDurationMs();
+  return durationMs > 0 && nowMs - gClockAnimation.startedAt < durationMs;
+}
+
+uint8_t clockWeatherMoveProgress(uint32_t nowMs) {
+  uint16_t durationMs = clockWeatherMoveDurationMs();
+  if (durationMs == 0) {
+    return 255;
+  }
+  uint32_t elapsed = nowMs - gClockAnimation.startedAt;
+  if (elapsed >= durationMs) {
+    return 255;
+  }
+  return static_cast<uint8_t>((elapsed * 255UL) / durationMs);
+}
+
+uint16_t clockCountCurrentLiveCells() {
+  uint16_t count = 0;
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    count += popcount64(currentRows[y] & activeMask);
+  }
+  return count;
+}
+
+uint16_t clockCountWeatherMoveTargets() {
+  uint16_t count = 0;
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    count += popcount64(nextRows[y] & activeMask);
+  }
+  return count;
+}
+
+uint16_t clockMoveTargetOrdinal(uint16_t sourceOrdinal, uint16_t sourceCount,
+                                uint16_t targetCount) {
+  uint16_t ordinal = (static_cast<uint32_t>(sourceOrdinal) * targetCount) / sourceCount;
+  return ordinal >= targetCount ? targetCount - 1 : ordinal;
+}
+
+void prepareClockWeatherMoveTransition() {
+  gClockMoveSourceCount = 0;
+  gClockMoveTargetCount = 0;
+  if (gClockAnimation.kind != kClockAnimationHour) {
+    return;
+  }
+
+  gClockMoveSourceCount = clockCountCurrentLiveCells();
+  gClockMoveTargetCount = clockCountWeatherMoveTargets();
 }
 
 uint16_t clockPixelHash(uint8_t x, uint8_t y, uint32_t seed) {
@@ -1074,13 +1145,139 @@ uint8_t clockColorStep(ClockAnimationKind kind) {
   return 48;
 }
 
+void clockClearDrawnPanel() {
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    uint16_t baseIndex = y * kMaxWidth;
+    for (uint8_t x = 0; x < panelWidth; x++) {
+      uint16_t index = baseIndex + x;
+      if (drawnColor[index] != 0) {
+        drawnColor[index] = 0;
+        matrix.drawPixel(x, y, 0);
+        updatedPixels++;
+      }
+    }
+  }
+}
+
+uint16_t clockWeatherMoverColor(uint16_t sourceIndex, uint8_t sourceX, uint8_t sourceY,
+                                uint16_t targetIndex, uint8_t progress) {
+  Hsv source = targetColorFor(sourceIndex, sourceX, sourceY, true);
+  uint8_t hue = blendHue(source.h, nextHue[targetIndex], progress);
+  uint8_t saturation = clockLerp8(source.s, nextSat[targetIndex], progress);
+  uint8_t value = clockLerp8(source.v, nextType[targetIndex], progress);
+  return hsv565(hue, saturation, value);
+}
+
+bool clockFindWeatherMoveTarget(uint8_t &targetX, uint8_t &targetY,
+                                uint16_t &targetIndex) {
+  for (; targetY < panelHeight; targetY++, targetX = 0) {
+    RowBits row = nextRows[targetY] & activeMask;
+    uint16_t baseIndex = targetY * kMaxWidth;
+    for (; targetX < panelWidth; targetX++) {
+      if (row & bitForX[targetX]) {
+        targetIndex = baseIndex + targetX;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool clockAdvanceWeatherMoveTarget(uint8_t &targetX, uint8_t &targetY,
+                                   uint16_t &targetIndex) {
+  if (targetX + 1 < panelWidth) {
+    targetX++;
+  } else {
+    targetX = 0;
+    targetY++;
+  }
+  return clockFindWeatherMoveTarget(targetX, targetY, targetIndex);
+}
+
+void renderClockWeatherMoveTransitionFrame(uint32_t nowMs) {
+  uint32_t renderStartedAt = micros();
+  updatedPixels = 0;
+  uint8_t progress = clockSmoothstep8(clockWeatherMoveProgress(nowMs));
+
+  clockClearDrawnPanel();
+
+  uint16_t sourceOrdinal = 0;
+  uint16_t targetOrdinal = 0;
+  uint8_t targetX = 0;
+  uint8_t targetY = 0;
+  uint16_t targetIndex = 0;
+  bool haveTarget = clockFindWeatherMoveTarget(targetX, targetY, targetIndex);
+
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    RowBits row = currentRows[y] & activeMask;
+    uint16_t baseIndex = y * kMaxWidth;
+
+    for (uint8_t x = 0; x < panelWidth; x++) {
+      if (!(row & bitForX[x])) {
+        continue;
+      }
+
+      if (haveTarget && sourceOrdinal < gClockMoveSourceCount) {
+        uint16_t desiredTarget = clockMoveTargetOrdinal(sourceOrdinal, gClockMoveSourceCount,
+                                                       gClockMoveTargetCount);
+        while (haveTarget && targetOrdinal < desiredTarget) {
+          haveTarget = clockAdvanceWeatherMoveTarget(targetX, targetY, targetIndex);
+          targetOrdinal++;
+        }
+
+        if (haveTarget) {
+          uint16_t sourceIndex = baseIndex + x;
+          uint8_t drawX = static_cast<uint8_t>((static_cast<uint16_t>(x) * (255 - progress) +
+                                                static_cast<uint16_t>(targetX) * progress + 127) / 255);
+          uint8_t drawY = static_cast<uint8_t>((static_cast<uint16_t>(y) * (255 - progress) +
+                                                static_cast<uint16_t>(targetY) * progress + 127) / 255);
+          uint16_t drawIndex = static_cast<uint16_t>(drawY) * kMaxWidth + drawX;
+          uint16_t color = clockWeatherMoverColor(sourceIndex, x, y, targetIndex, progress);
+
+          if (color != drawnColor[drawIndex]) {
+            drawnColor[drawIndex] = color;
+            matrix.drawPixel(drawX, drawY, color);
+            updatedPixels++;
+          }
+        }
+      }
+
+      sourceOrdinal++;
+    }
+  }
+
+  uint32_t showStartedAt = micros();
+  matrix.show();
+  uint32_t showEndedAt = micros();
+
+  addProfile(profileRenderMicros, profileRenderMaxMicros,
+             showStartedAt - renderStartedAt);
+  addProfile(profileShowMicros, profileShowMaxMicros, showEndedAt - showStartedAt);
+  profileRenderSamples++;
+  framesThisPeriod++;
+}
+
 void renderClockAnimationFrame(uint32_t nowMs) {
+  if (clockWeatherMoveTransitionActive(nowMs)) {
+    renderClockWeatherMoveTransitionFrame(nowMs);
+    return;
+  }
+
   uint32_t renderStartedAt = micros();
   updatedPixels = 0;
   uint8_t progress = clockAnimationProgress(nowMs);
   uint8_t eased = clockSmoothstep8(progress);
-  bool instantReveal = gClockAnimation.fastReveal && gClockAnimation.kind == kClockAnimationHour;
-  uint8_t revealProgress = instantReveal ? 255 : eased;
+  bool weatherMoveSettled = gClockAnimation.kind == kClockAnimationHour &&
+                            gClockMoveSourceCount > 0 && gClockMoveTargetCount > 0;
+  bool fullReveal = (gClockAnimation.fastReveal || weatherMoveSettled) &&
+                    gClockAnimation.kind == kClockAnimationHour;
+  bool snapToTarget = gClockAnimation.fastReveal && !weatherMoveSettled &&
+                      gClockAnimation.kind == kClockAnimationHour;
+  bool weatherFadeIn = weatherMoveSettled &&
+                       nowMs - (gClockAnimation.startedAt + clockWeatherMoveDurationMs()) <
+                           kClockWeatherFadeMs;
+  uint8_t revealProgress = fullReveal ? 255 : eased;
+  uint8_t colorStep = weatherFadeIn ? kClockWeatherFadeColorStep : clockColorStep(gClockAnimation.kind);
   ClockHourRenderState hourState = clockHourRenderStateFor(nowMs);
 
   for (uint8_t y = 0; y < panelHeight; y++) {
@@ -1102,9 +1299,9 @@ void renderClockAnimationFrame(uint32_t nowMs) {
         targetColor = clockScaledHsv565(nextHue[index], nextSat[index],
                                         nextType[index], targetWeight);
       }
-      uint16_t color = (instantReveal || progress >= 254) ? targetColor :
-                       approachColor565(drawnColor[index], targetColor,
-                                         clockColorStep(gClockAnimation.kind));
+      uint16_t color = (snapToTarget || progress >= 254) ? targetColor :
+                        approachColor565(drawnColor[index], targetColor,
+                                          colorStep);
 
       if (color != drawnColor[index]) {
         drawnColor[index] = color;
