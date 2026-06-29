@@ -55,10 +55,6 @@ void applyDrawnCells(const uint8_t *mask, uint8_t w, uint8_t h);
 
 void webServerStart();  // defined below; called from onWiFiEvent
 
-// --- connectivity state (read by main.cpp for the one-time IP scroll) ---
-volatile bool gShowIpScroll = false;
-char gIpText[32] = {0};
-
 namespace {
 constexpr uint16_t kSettingsVersion = 4;   // bumped: removed retired wave/knock-origin tuning (struct layout changed)
 constexpr const char *kNvsNamespace = "matrixlife";
@@ -430,12 +426,12 @@ void onWiFiEvent(arduino_event_t *e) {
       break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP: {
       IPAddress ip = WiFi.localIP();
-      snprintf(gIpText, sizeof(gIpText), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
-      Serial.printf("[wifi] connected: http://%s/  (http://%s.local/)\n", gIpText, kMdnsHost);
+      char ipText[32];
+      snprintf(ipText, sizeof(ipText), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+      Serial.printf("[wifi] connected: http://%s/  (http://%s.local/)\n", ipText, kMdnsHost);
       if (MDNS.begin(kMdnsHost)) {
         MDNS.addService("http", "tcp", 80);
       }
-      gShowIpScroll = true;       // main loop scrolls it once
       webServerStart();           // forward-declared above; defined below
       clockStartNtp();
       if (gClockSaved.autoTimezone || gWeatherSaved.autoLocation) {
@@ -524,11 +520,11 @@ void settingsClearNvs() {
 void webPortalBegin() {
   settingsLoadFromNvs();
   WiFi.onEvent(onWiFiEvent);
-  // WIFI_PROV_SCHEME_HANDLER_FREE_BTDM frees the BT controller memory once
+  // NETWORK_PROV_SCHEME_HANDLER_FREE_BTDM frees the BT controller memory once
   // provisioning ends. If already provisioned, this connects with stored creds
   // and never starts BLE.
-  WiFiProv.beginProvision(WIFI_PROV_SCHEME_BLE, WIFI_PROV_SCHEME_HANDLER_FREE_BTDM,
-                          WIFI_PROV_SECURITY_1, kProvPop, kProvServiceName);
+  WiFiProv.beginProvision(NETWORK_PROV_SCHEME_BLE, NETWORK_PROV_SCHEME_HANDLER_FREE_BTDM,
+                          NETWORK_PROV_SECURITY_1, kProvPop, kProvServiceName);
   WiFiProv.printQR(kProvServiceName, kProvPop, "ble");  // QR + payload to Serial
 }
 

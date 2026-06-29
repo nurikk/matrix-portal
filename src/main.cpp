@@ -50,8 +50,6 @@ uint8_t oePin = 16;
 #if WIFI_PORTAL_ENABLED
 #include <WiFi.h>
 #include "web_portal.h"
-extern volatile bool gShowIpScroll;
-extern char gIpText[32];
 #endif
 
 constexpr uint16_t kMatrixWidth = MATRIX_WIDTH;
@@ -120,30 +118,9 @@ void setup() {
   Serial.println(panelHeight);
 }
 
-#if WIFI_PORTAL_ENABLED
-void scrollIpOnce() {
-  matrix.setTextWrap(false);
-  matrix.setTextColor(color565(0, 255, 80));
-  int16_t textW = 6 * (int16_t)strlen(gIpText);   // default GFX font is 6px wide
-  for (int16_t x = panelWidth; x > -textW; x--) {
-    matrix.fillScreen(0);
-    matrix.setCursor(x, panelHeight / 2 - 4);
-    matrix.print(gIpText);
-    matrix.show();
-    delay(15);
-  }
-}
-#endif
-
 void loop() {
 #if WIFI_PORTAL_ENABLED
   webPortalTick();
-  if (gShowIpScroll) {
-    gShowIpScroll = false;
-    scrollIpOnce();
-    lastSimulationStepAt = millis();   // avoid a catch-up burst after the pause
-    lastRenderAt = lastSimulationStepAt;
-  }
   if (gReqReseed) { gReqReseed = false; seedLife(); }
   if (gReqClear)  { gReqClear = false; clearBoard(); }                     // clearBoard() pauses so the empty board persists
   if (gReqPause)  { gPaused = (gReqPause > 0); gReqPause = 0; }             // explicit Stop/Resume; overrides clear's implicit pause

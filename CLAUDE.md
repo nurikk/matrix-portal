@@ -99,7 +99,7 @@ so `pio test` won't try to run these on-target.)
 `src/main.cpp` is a thin orchestrator: includes, board pinout (`#if`/`#elif` on
 `ARDUINO_ADAFRUIT_MATRIXPORTAL_ESP32S3` / `_VARIANT_MATRIXPORTAL_M4_`), geometry
 constants, the `matrix`/`accelerometer` objects, the `MATRIX_BENCHMARK` gate, and the Life
-`setup()`/`scrollIpOnce()`/`loop()`. All other Life code lives in headers `#include`d into
+`setup()`/`loop()`. All other Life code lives in headers `#include`d into
 that one TU (see the single-TU note above). The Life headers, in include/dependency order:
 
 - **`life_state.h`** — the data model: Life constants, the `#error` geometry guard,
