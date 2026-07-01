@@ -354,6 +354,11 @@ void setClockStatus(const char *status) {
   taskEXIT_CRITICAL(&gSettingsMux);
 }
 
+void applyClockPosix(const char *posix) {
+  setenv("TZ", posix, 1);
+  tzset();
+}
+
 void clockApplyTimezone(const char *timezone) {
   const char *posix = nullptr;
   if (!lookupClockPosix(timezone, &posix)) {
@@ -364,15 +369,22 @@ void clockApplyTimezone(const char *timezone) {
     setClockStatus(gNtpStarted ? "clock syncing" : "timezone ready");
   }
 
-  setenv("TZ", posix, 1);
-  tzset();
+  applyClockPosix(posix);
   taskENTER_CRITICAL(&gSettingsMux);
   copyString(gClockPosix, sizeof(gClockPosix), posix);
   taskEXIT_CRITICAL(&gSettingsMux);
 }
 
 void clockStartNtp() {
+  char posix[sizeof(gClockPosix)];
+  taskENTER_CRITICAL(&gSettingsMux);
+  copyString(posix, sizeof(posix), gClockPosix);
+  taskEXIT_CRITICAL(&gSettingsMux);
+
   configTime(0, 0, kNtpServer1, kNtpServer2, kNtpServer3);
+  // ESP32 Arduino's configTime() resets TZ to UTC for zero offsets; restore the
+  // IANA-derived POSIX zone so localtime_r() keeps DST rules after NTP starts.
+  applyClockPosix(posix[0] ? posix : "UTC0");
   gNtpStarted = true;
   setClockStatus("clock syncing");
 }
