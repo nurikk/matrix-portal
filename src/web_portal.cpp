@@ -466,7 +466,8 @@ void onWiFiEvent(arduino_event_t *e) {
       break;
     }
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-      WiFi.reconnect();
+      Serial.printf("[wifi] disconnected: reason=%u\n",
+                    e->event_info.wifi_sta_disconnected.reason);
       break;
     default:
       break;
@@ -995,6 +996,7 @@ void weatherFetchTask(void *) {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
+  http.setConnectTimeout(kWeatherHttpTimeoutMs);
   http.setTimeout(kWeatherHttpTimeoutMs);
   bool ok = false;
   int16_t tempTenths = 0;
@@ -1037,7 +1039,10 @@ void weatherFetchTask(void *) {
         }
       }
     } else {
-      Serial.printf("[weather] fetch failed: HTTP %d\n", status);
+      char tlsError[128] = "";
+      int tlsCode = client.lastError(tlsError, sizeof(tlsError));
+      Serial.printf("[weather] fetch failed: HTTP %d (%s), TLS %d (%s)\n",
+                    status, HTTPClient::errorToString(status).c_str(), tlsCode, tlsError);
     }
     http.end();
   }
