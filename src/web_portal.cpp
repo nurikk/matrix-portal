@@ -78,6 +78,10 @@ constexpr const char *kNtpServer3 = "time.google.com";
 constexpr uint32_t kWeatherCacheMs = 20UL * 60UL * 1000UL;
 constexpr uint32_t kWeatherHttpTimeoutMs = 7000;
 constexpr uint32_t kWeatherStartupRefreshDelayMs = 10000;
+constexpr uint32_t kWeatherBusyRetryMs = 1000;
+constexpr uint32_t kInitialSyncPollMs = 50;
+constexpr uint32_t kInitialSyncLogMs = 2000;
+constexpr uint32_t kInitialSyncWeatherKickMs = 5000;
 constexpr uint8_t kWeatherSyncMinuteA = 25;
 constexpr uint8_t kWeatherSyncMinuteB = 55;
 constexpr const char *kWeatherProvider = "Open-Meteo";
@@ -125,7 +129,7 @@ uint32_t gWeatherLastFetchAt = 0;
 int32_t gWeatherLastLatE6 = kWeatherCoordUnset;
 int32_t gWeatherLastLonE6 = kWeatherCoordUnset;
 TaskHandle_t gLocationDetectTask = nullptr;
-TaskHandle_t gWeatherFetchTask = nullptr;
+bool gWeatherFetchBusy = false;
 bool gNtpStarted = false;
 volatile bool gReqWeatherRefresh = false;
 volatile bool gReqWeatherRefreshForce = false;
@@ -395,6 +399,10 @@ bool clockReadLocal(char *out, size_t cap) {
   struct tm local;
   localtime_r(&now, &local);
   return strftime(out, cap, "%Y-%m-%d %H:%M:%S", &local) > 0;
+}
+
+bool clockTimeSynced() {
+  return time(nullptr) >= 1609459200;
 }
 
 void clockSaveToNvs(const ClockSettings &s) {
@@ -926,6 +934,12 @@ void scheduleWeatherRefresh(uint32_t delayMs, bool force) {
   taskEXIT_CRITICAL(&gSettingsMux);
 }
 
+void finishWeatherFetchTask() {
+  taskENTER_CRITICAL(&gSettingsMux);
+  gWeatherFetchBusy = false;
+  taskEXIT_CRITICAL(&gSettingsMux);
+}
+
 void schedulePeriodicWeatherRefresh() {
   time_t now = time(nullptr);
   if (now < 1609459200) return;
@@ -946,19 +960,19 @@ void weatherFetchTask(void *) {
   weatherSyncSnapshotSettings(settings);
 
   if (!settings.enabled) {
-    gWeatherFetchTask = nullptr;
+    finishWeatherFetchTask();
     vTaskDelete(nullptr);
     return;
   }
   if (!weatherHasLocation(settings)) {
-    gWeatherFetchTask = nullptr;
+    finishWeatherFetchTask();
     vTaskDelete(nullptr);
     return;
   }
   if (WiFi.status() != WL_CONNECTED) {
     setWeatherFetchFailureStatus("weather wifi unavailable");
     scheduleWeatherRefresh(kWeatherStartupRefreshDelayMs, true);
-    gWeatherFetchTask = nullptr;
+    finishWeatherFetchTask();
     vTaskDelete(nullptr);
     return;
   }
@@ -1056,7 +1070,7 @@ void weatherFetchTask(void *) {
   }
 
   broadcastSchema();
-  gWeatherFetchTask = nullptr;
+  finishWeatherFetchTask();
   vTaskDelete(nullptr);
 }
 
@@ -1429,6 +1443,96 @@ void webPortalTick() {
   }
 }
 
+bool weatherInitialSyncReady() {
+  WeatherSettings settings;
+  WeatherSnapshot snapshot;
+  taskENTER_CRITICAL(&gSettingsMux);
+  settings = gWeatherLive;
+  snapshot = gWeatherSnapshot;
+  taskEXIT_CRITICAL(&gSettingsMux);
+
+  if (!settings.enabled) return true;
+  if (!weatherHasLocation(settings)) return settings.autoLocation == 0;
+  return snapshot.valid && snapshot.updatedEpoch != 0;
+}
+
+void buildInitialSyncStatus(bool wifiReady, bool timeReady, bool weatherReady,
+                            char *out, size_t cap) {
+  if (!out || cap == 0) return;
+  if (!wifiReady) {
+    copyString(out, cap, "Connecting WiFi");
+    return;
+  }
+  if (!timeReady) {
+    copyString(out, cap, "Syncing NTP");
+    return;
+  }
+  if (!weatherReady) {
+    WeatherSettings settings;
+    WeatherSnapshot snapshot;
+    taskENTER_CRITICAL(&gSettingsMux);
+    settings = gWeatherLive;
+    snapshot = gWeatherSnapshot;
+    taskEXIT_CRITICAL(&gSettingsMux);
+
+    if (settings.enabled && !weatherHasLocation(settings) && settings.autoLocation) {
+      copyString(out, cap, "Detecting location");
+    } else if (strcmp(snapshot.status, "weather fetching") == 0) {
+      copyString(out, cap, "Loading weather");
+    } else if (strcmp(snapshot.status, "weather fetch failed") == 0 ||
+               strcmp(snapshot.status, "weather wifi unavailable") == 0) {
+      copyString(out, cap, "Weather retry");
+    } else {
+      copyString(out, cap, "Loading weather");
+    }
+    return;
+  }
+  copyString(out, cap, "Starting animations");
+}
+
+void webPortalWaitForInitialSync(WebPortalSyncStatusCallback statusCallback) {
+  Serial.println("[boot] waiting for WiFi, time, and weather");
+  uint32_t lastLogAt = 0;
+  uint32_t lastWeatherKickAt = millis() - kInitialSyncWeatherKickMs;
+  char lastStatus[32] = "";
+
+  for (;;) {
+    webPortalTick();
+
+    uint32_t nowMs = millis();
+    bool wifiReady = WiFi.status() == WL_CONNECTED;
+    bool timeReady = clockTimeSynced();
+    bool weatherReady = weatherInitialSyncReady();
+
+    char status[32];
+    buildInitialSyncStatus(wifiReady, timeReady, weatherReady, status, sizeof(status));
+    if (strcmp(status, lastStatus) != 0) {
+      copyString(lastStatus, sizeof(lastStatus), status);
+      Serial.printf("[boot] %s\n", status);
+      if (statusCallback) statusCallback(status);
+    }
+
+    if (wifiReady && timeReady && weatherReady) {
+      Serial.println("[boot] initial WiFi/time/weather sync complete");
+      delay(350);
+      return;
+    }
+
+    if (wifiReady && timeReady && !weatherReady && nowMs - lastWeatherKickAt >= kInitialSyncWeatherKickMs) {
+      lastWeatherKickAt = nowMs;
+      weatherRequestRefresh();
+    }
+
+    if (nowMs - lastLogAt >= kInitialSyncLogMs) {
+      lastLogAt = nowMs;
+      Serial.printf("[boot] waiting: wifi=%u time=%u weather=%u\n",
+                    wifiReady ? 1 : 0, timeReady ? 1 : 0, weatherReady ? 1 : 0);
+    }
+
+    delay(kInitialSyncPollMs);
+  }
+}
+
 bool weatherCopySnapshot(WeatherSnapshot &out) {
   taskENTER_CRITICAL(&gSettingsMux);
   out = gWeatherSnapshot;
@@ -1458,11 +1562,22 @@ void startWeatherRefresh(bool force) {
       lastLonE6 == settings.longitudeE6) {
     return;
   }
-  if (gWeatherFetchTask) return;
+  bool busy;
+  taskENTER_CRITICAL(&gSettingsMux);
+  busy = gWeatherFetchBusy;
+  if (!busy) {
+    gWeatherFetchBusy = true;
+  }
+  taskEXIT_CRITICAL(&gSettingsMux);
+  if (busy) {
+    scheduleWeatherRefresh(kWeatherBusyRetryMs, force);
+    return;
+  }
+
   BaseType_t created = xTaskCreatePinnedToCore(weatherFetchTask, "weather", 8192,
-                                               nullptr, 1, &gWeatherFetchTask, 0);
+                                               nullptr, 1, nullptr, 0);
   if (created != pdPASS) {
-    gWeatherFetchTask = nullptr;
+    finishWeatherFetchTask();
     setWeatherFetchFailureStatus("weather fetch unavailable");
   }
 }
@@ -1477,6 +1592,7 @@ void webPortalBegin() {}
 void settingsLoadFromNvs() {}
 void settingsSaveToNvs(const LifeSettings &) {}
 void settingsClearNvs() {}
+void webPortalWaitForInitialSync(WebPortalSyncStatusCallback) {}
 void webPortalTick() {}
 bool weatherCopySnapshot(WeatherSnapshot &out) { out = {}; return false; }
 void weatherRequestRefresh() {}

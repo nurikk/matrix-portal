@@ -79,6 +79,36 @@ Adafruit_LIS3DH accelerometer = Adafruit_LIS3DH();
 #include "life_spawn.h"
 #include "life_sim.h"
 
+#if WIFI_PORTAL_ENABLED
+void renderBootStatus(const char *status) {
+  matrix.fillScreen(0);
+  matrix.setTextWrap(false);
+  matrix.setTextSize(1);
+
+  matrix.setTextColor(color565(52, 227, 155));
+  matrix.setCursor(2, 2);
+  matrix.print("MatrixLife");
+
+  matrix.setTextColor(color565(154, 163, 184));
+  matrix.setCursor(2, 13);
+  matrix.print("boot sync");
+
+  matrix.setTextColor(color565(232, 193, 90));
+  matrix.setCursor(2, 27);
+  matrix.setTextWrap(true);
+  matrix.print(status ? status : "Starting");
+  matrix.setTextWrap(false);
+
+  if (panelHeight >= 48) {
+    matrix.setTextColor(color565(98, 108, 129));
+    matrix.setCursor(2, panelHeight - 9);
+    matrix.print("please wait");
+  }
+
+  matrix.show();
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -95,11 +125,20 @@ void setup() {
 
   configureLifeBounds();
 #if WIFI_PORTAL_ENABLED
+  renderBootStatus("Starting");
   webPortalBegin();   // loads gSaved/gLive from NVS (defaults on first boot)
 #endif
+#if WIFI_PORTAL_ENABLED
+  renderBootStatus("Starting sensors");
+#endif
   initAccelerometer();
+#if WIFI_PORTAL_ENABLED
+  renderBootStatus("Starting WiFi");
+  webPortalWaitForInitialSync(renderBootStatus);
+#else
   matrix.fillScreen(0);
   matrix.show();
+#endif
   seedLife();
   renderFrame();
   resetProfileCounters();
