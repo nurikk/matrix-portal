@@ -294,8 +294,7 @@ uint16_t clockTransitionMoveDurationMs() {
 }
 
 bool clockTransitionActive(uint32_t nowMs) {
-  if (gClockAnimation.kind == kClockAnimationNone || gClockMoveSourceCount == 0 ||
-      gClockMoveTargetCount == 0) {
+  if (gClockAnimation.kind == kClockAnimationNone || gClockMoveTargetCount == 0) {
     return false;
   }
   uint16_t durationMs = clockTransitionMoveDurationMs();
@@ -316,6 +315,11 @@ uint8_t clockTransitionProgress(uint32_t nowMs, uint16_t durationMs) {
 uint8_t clockTransitionOverlapProgress(uint32_t nowMs, uint16_t moveDurationMs) {
   uint16_t overlapMs = moveDurationMs < kClockTransitionOverlapMs ? moveDurationMs
                                                                   : kClockTransitionOverlapMs;
+  if (gClockMoveSourceCount < gClockMoveTargetCount && gClockMoveTargetCount > 0) {
+    uint16_t shortfall = gClockMoveTargetCount - gClockMoveSourceCount;
+    uint16_t extraRange = moveDurationMs - overlapMs;
+    overlapMs += (static_cast<uint32_t>(extraRange) * shortfall) / gClockMoveTargetCount;
+  }
   if (overlapMs == 0) {
     return 255;
   }
@@ -344,6 +348,53 @@ uint16_t clockMoveTargetOrdinal(uint16_t sourceOrdinal, uint16_t sourceCount,
                                 uint16_t targetCount) {
   uint16_t ordinal = (static_cast<uint32_t>(sourceOrdinal) * targetCount) / sourceCount;
   return ordinal >= targetCount ? targetCount - 1 : ordinal;
+}
+
+
+uint8_t clockTransitionGridSize() {
+  uint8_t size = 1;
+  while (size < panelWidth || size < panelHeight) {
+    size <<= 1;
+  }
+  return size;
+}
+
+uint16_t clockTransitionPositionCount() {
+  uint16_t size = clockTransitionGridSize();
+  return size * size;
+}
+
+void clockMortonCoordinate(uint16_t position, uint8_t &x, uint8_t &y) {
+  x = 0;
+  y = 0;
+  for (uint8_t bit = 0; bit < 7; bit++) {
+    x |= ((position >> (bit * 2)) & 1) << bit;
+    y |= ((position >> (bit * 2 + 1)) & 1) << bit;
+  }
+}
+
+uint8_t clockLerpWrappedCoordinate(uint8_t from, uint8_t to, uint8_t extent,
+                                   uint8_t amount) {
+  if (extent <= 1) {
+    return 0;
+  }
+
+  int16_t delta = static_cast<int16_t>(to) - from;
+  int16_t half = extent / 2;
+  if (delta > half) {
+    delta -= extent;
+  } else if (delta < -half) {
+    delta += extent;
+  }
+
+  int32_t scaled = static_cast<int32_t>(from) * 255 + static_cast<int32_t>(delta) * amount;
+  int16_t value = scaled >= 0 ? static_cast<int16_t>((scaled + 127) / 255)
+                              : static_cast<int16_t>((scaled - 127) / 255);
+  value %= extent;
+  if (value < 0) {
+    value += extent;
+  }
+  return static_cast<uint8_t>(value);
 }
 
 void prepareClockTransition() {
@@ -1205,41 +1256,36 @@ uint16_t clockTransitionMoverColor(uint16_t sourceIndex, uint8_t sourceX, uint8_
   return hsv565(hue, saturation, value);
 }
 
-bool clockFindTransitionTarget(const RowBits *targetRows, uint8_t &targetX,
-                               uint8_t &targetY, uint16_t &targetIndex) {
-  for (; targetY < panelHeight; targetY++, targetX = 0) {
-    RowBits row = targetRows[targetY] & activeMask;
-    uint16_t baseIndex = targetY * kMaxWidth;
-    for (; targetX < panelWidth; targetX++) {
-      if (row & bitForX[targetX]) {
-        targetIndex = baseIndex + targetX;
-        return true;
-      }
+bool clockFindTransitionTarget(const RowBits *targetRows, uint16_t &position,
+                               uint8_t &targetX, uint8_t &targetY,
+                               uint16_t &targetIndex) {
+  uint16_t positionCount = clockTransitionPositionCount();
+  while (position < positionCount) {
+    clockMortonCoordinate(position++, targetX, targetY);
+    if (targetX >= panelWidth || targetY >= panelHeight ||
+        !(targetRows[targetY] & bitForX[targetX])) {
+      continue;
     }
+
+    targetIndex = static_cast<uint16_t>(targetY) * kMaxWidth + targetX;
+    return true;
   }
   return false;
 }
 
-bool clockAdvanceTransitionTarget(const RowBits *targetRows, uint8_t &targetX,
-                                  uint8_t &targetY, uint16_t &targetIndex) {
-  if (targetX + 1 < panelWidth) {
-    targetX++;
-  } else {
-    targetX = 0;
-    targetY++;
-  }
-  return clockFindTransitionTarget(targetRows, targetX, targetY, targetIndex);
-}
-
 void renderClockTransitionTargetOverlay(uint32_t nowMs, const RowBits *targetRows,
                                         uint8_t overlapProgress) {
-  if (gClockAnimation.kind != kClockAnimationMinute || overlapProgress == 0) {
+  if (overlapProgress == 0) {
     return;
   }
 
-  // Ramp the face from the dim arrival floor up to full brightness across the
-  // overlap so the clock is fully lit exactly when the movers land.
-  uint8_t targetWeight = clockLerp8(kClockMinuteMoveArrivalScale, 255, overlapProgress);
+  uint8_t sourceCoverage = gClockMoveSourceCount >= gClockMoveTargetCount
+                               ? 255
+                               : static_cast<uint8_t>((static_cast<uint32_t>(gClockMoveSourceCount) * 255) /
+                                                      gClockMoveTargetCount);
+  uint8_t startWeight = (static_cast<uint16_t>(kClockMinuteMoveArrivalScale) * sourceCoverage) / 255;
+  uint8_t targetWeight = clockLerp8(startWeight, 255, overlapProgress);
+  ClockHourRenderState hourState = clockHourRenderStateFor(nowMs);
   for (uint8_t y = 0; y < panelHeight; y++) {
     RowBits row = targetRows[y] & activeMask;
     uint16_t baseIndex = y * kMaxWidth;
@@ -1249,8 +1295,14 @@ void renderClockTransitionTargetOverlay(uint32_t nowMs, const RowBits *targetRow
       }
 
       uint16_t index = baseIndex + x;
-      uint16_t color = clockMinuteAnimatedColor(index, x, y, true, targetWeight,
-                                                overlapProgress, nowMs);
+      uint16_t color = 0;
+      if (gClockAnimation.kind == kClockAnimationMinute) {
+        color = clockMinuteAnimatedColor(index, x, y, true, targetWeight,
+                                         overlapProgress, nowMs);
+      } else if (gClockAnimation.kind == kClockAnimationHour) {
+        color = clockHourAnimatedColor(index, x, y, true, targetWeight,
+                                       overlapProgress, hourState);
+      }
       if (color != drawnColor[index]) {
         drawnColor[index] = color;
         matrix.drawPixel(x, y, color);
@@ -1272,49 +1324,48 @@ void renderClockTransitionFrame(uint32_t nowMs, const RowBits *sourceRows,
 
   uint16_t sourceOrdinal = 0;
   uint16_t targetOrdinal = 0;
+  uint16_t targetPosition = 0;
   uint8_t targetX = 0;
   uint8_t targetY = 0;
   uint16_t targetIndex = 0;
-  bool haveTarget = clockFindTransitionTarget(targetRows, targetX, targetY, targetIndex);
+  bool haveTarget = clockFindTransitionTarget(targetRows, targetPosition, targetX,
+                                              targetY, targetIndex);
 
-  for (uint8_t y = 0; y < panelHeight; y++) {
-    RowBits row = sourceRows[y] & activeMask;
-    uint16_t baseIndex = y * kMaxWidth;
-
-    for (uint8_t x = 0; x < panelWidth; x++) {
-      if (!(row & bitForX[x])) {
-        continue;
-      }
-
-      if (haveTarget && sourceOrdinal < gClockMoveSourceCount) {
-        uint16_t desiredTarget = clockMoveTargetOrdinal(sourceOrdinal, gClockMoveSourceCount,
-                                                       gClockMoveTargetCount);
-        while (haveTarget && targetOrdinal < desiredTarget) {
-          haveTarget = clockAdvanceTransitionTarget(targetRows, targetX, targetY, targetIndex);
-          targetOrdinal++;
-        }
-
-        if (haveTarget) {
-          uint16_t sourceIndex = baseIndex + x;
-          uint8_t drawX = static_cast<uint8_t>((static_cast<uint16_t>(x) * (255 - progress) +
-                                                static_cast<uint16_t>(targetX) * progress + 127) / 255);
-          uint8_t drawY = static_cast<uint8_t>((static_cast<uint16_t>(y) * (255 - progress) +
-                                                static_cast<uint16_t>(targetY) * progress + 127) / 255);
-          uint16_t drawIndex = static_cast<uint16_t>(drawY) * kMaxWidth + drawX;
-          uint16_t color = clockTransitionMoverColor(sourceIndex, x, y, targetIndex,
-                                                     targetX, targetY, progress,
-                                                     overlapProgress, nowMs);
-
-          if (color != drawnColor[drawIndex]) {
-            drawnColor[drawIndex] = color;
-            matrix.drawPixel(drawX, drawY, color);
-            updatedPixels++;
-          }
-        }
-      }
-
-      sourceOrdinal++;
+  uint16_t positionCount = clockTransitionPositionCount();
+  for (uint16_t sourcePosition = 0; sourcePosition < positionCount; sourcePosition++) {
+    uint8_t x, y;
+    clockMortonCoordinate(sourcePosition, x, y);
+    if (x >= panelWidth || y >= panelHeight || !(sourceRows[y] & bitForX[x])) {
+      continue;
     }
+
+    if (haveTarget && sourceOrdinal < gClockMoveSourceCount) {
+      uint16_t desiredTarget = clockMoveTargetOrdinal(sourceOrdinal, gClockMoveSourceCount,
+                                                       gClockMoveTargetCount);
+      while (haveTarget && targetOrdinal < desiredTarget) {
+        haveTarget = clockFindTransitionTarget(targetRows, targetPosition, targetX,
+                                               targetY, targetIndex);
+        targetOrdinal++;
+      }
+
+      if (haveTarget) {
+        uint16_t sourceIndex = static_cast<uint16_t>(y) * kMaxWidth + x;
+        uint8_t drawX = clockLerpWrappedCoordinate(x, targetX, panelWidth, progress);
+        uint8_t drawY = clockLerpWrappedCoordinate(y, targetY, panelHeight, progress);
+        uint16_t drawIndex = static_cast<uint16_t>(drawY) * kMaxWidth + drawX;
+        uint16_t color = clockTransitionMoverColor(sourceIndex, x, y, targetIndex,
+                                                   targetX, targetY, progress,
+                                                   overlapProgress, nowMs);
+
+        if (color != drawnColor[drawIndex]) {
+          drawnColor[drawIndex] = color;
+          matrix.drawPixel(drawX, drawY, color);
+          updatedPixels++;
+        }
+      }
+    }
+
+    sourceOrdinal++;
   }
 
   uint32_t showStartedAt = micros();
@@ -1338,7 +1389,7 @@ void renderClockAnimationFrame(uint32_t nowMs) {
   updatedPixels = 0;
   uint8_t progress = clockAnimationProgress(nowMs);
   uint8_t eased = clockSmoothstep8(progress);
-  bool moveSettled = gClockMoveSourceCount > 0 && gClockMoveTargetCount > 0;
+  bool moveSettled = gClockMoveTargetCount > 0;
   bool fullReveal = gClockAnimation.fastReveal || moveSettled;
   bool snapToTarget = gClockAnimation.fastReveal && !moveSettled &&
                       gClockAnimation.kind == kClockAnimationHour;
@@ -1378,7 +1429,7 @@ void renderClockAnimationFrame(uint32_t nowMs) {
       }
       uint16_t color = (snapToTarget || minuteLive || progress >= 254) ? targetColor :
                         approachColor565(drawnColor[index], targetColor,
-                                          colorStep);
+                                         colorStep);
 
       if (color != drawnColor[index]) {
         drawnColor[index] = color;
@@ -1425,14 +1476,12 @@ void commitClockFaceToLife() {
         visualHue[index] = nextHue[index];
         visualSat[index] = nextSat[index];
         visualValue[index] = nextType[index];
-        drawnColor[index] = hsv565(nextHue[index], nextSat[index], nextType[index]);
         liveCells++;
       } else {
         cellAge[index] = 0;
         visualHue[index] = 0;
         visualSat[index] = 0;
         visualValue[index] = 0;
-        drawnColor[index] = 0;
       }
       forceRedraw[index] = true;
     }

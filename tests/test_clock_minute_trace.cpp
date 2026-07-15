@@ -1,18 +1,23 @@
-// Host trace for the 5-minute clock transition. Renders the minute animation
-// frame by frame and asserts two things:
-//   1. No pixel ever contains a visible green component (palette guarantee).
-//   2. The clock face reaches full brightness *as the pixels finish gathering*,
-//      not seconds later -- i.e. the animation "starts" when the move lands.
+// Host trace for the 5-minute clock transition. Covers spatial traversal,
+// wrapped motion, empty-board reveal, palette, gather timing, animation, and
+// framebuffer consistency across the supported panel geometries.
 #include <array>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
 
+#ifndef MATRIX_WIDTH
 #define MATRIX_WIDTH 64
+#endif
 #define MATRIX_BIT_DEPTH 5
 #define MATRIX_RGB_CHAINS 1
+#ifndef MATRIX_TILE
 #define MATRIX_TILE 1
+#endif
 #define WIFI_PORTAL_ENABLED 1
+
+static constexpr uint16_t kTestHeight = 64 * MATRIX_TILE;
+static constexpr uint32_t kTestCellCount = MATRIX_WIDTH * kTestHeight;
 
 static uint32_t gNowMs = 0;
 static uint32_t gNowMicros = 0;
@@ -26,11 +31,11 @@ struct FakeSerial {
 };
 
 struct FakeMatrix {
-  std::array<uint16_t, MATRIX_WIDTH * 64> pixels = {};
+  std::array<uint16_t, kTestCellCount> pixels = {};
   uint32_t frameCount = 0;
 
   void drawPixel(int x, int y, uint16_t color) {
-    if (x >= 0 && x < MATRIX_WIDTH && y >= 0 && y < 64) {
+    if (x >= 0 && x < MATRIX_WIDTH && y >= 0 && y < kTestHeight) {
       pixels[y * MATRIX_WIDTH + x] = color;
     }
   }
@@ -77,12 +82,49 @@ static bool hasVisibleGreen(uint16_t color) {
 
 static void configureHarnessBounds() {
   panelWidth = MATRIX_WIDTH;
-  panelHeight = 64;
+  panelHeight = kTestHeight;
   activeMask = activeMaskFor(panelWidth);
   for (uint8_t x = 0; x < panelWidth; x++) {
     bitForX[x] = RowBits(0, 0);
     rowBitSet(bitForX[x], x);
   }
+}
+
+
+static int checkTransitionGeometry() {
+  const uint8_t expected[4][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
+  for (uint16_t position = 0; position < 4; position++) {
+    uint8_t x, y;
+    clockMortonCoordinate(position, x, y);
+    if (x != expected[position][0] || y != expected[position][1]) {
+      std::printf("FAIL: Morton position %u decoded as (%u,%u), expected (%u,%u)\n",
+                  position, x, y, expected[position][0], expected[position][1]);
+      return 1;
+    }
+  }
+
+  uint16_t gridSize = panelWidth > panelHeight ? panelWidth : panelHeight;
+  uint16_t expectedPositions = gridSize * gridSize;
+  if (clockTransitionPositionCount() != expectedPositions) {
+    std::printf("FAIL: transition grid contains %u positions, expected %u\n",
+                clockTransitionPositionCount(), expectedPositions);
+    return 1;
+  }
+
+  if (clockLerpWrappedCoordinate(63, 1, 64, 0) != 63 ||
+      clockLerpWrappedCoordinate(63, 1, 64, 127) != 0 ||
+      clockLerpWrappedCoordinate(63, 1, 64, 255) != 1 ||
+      clockLerpWrappedCoordinate(1, 63, 64, 127) != 0) {
+    std::printf("FAIL: 64-wide transition interpolation did not take the shortest wrapped path\n");
+    return 1;
+  }
+  if (gridSize == 128 &&
+      (clockLerpWrappedCoordinate(127, 1, 128, 127) != 0 ||
+       clockLerpWrappedCoordinate(1, 127, 128, 127) != 0)) {
+    std::printf("FAIL: 128-wide transition interpolation did not take the shortest wrapped path\n");
+    return 1;
+  }
+  return 0;
 }
 
 static void seedGreenHeavyLife() {
@@ -109,6 +151,59 @@ static void seedGreenHeavyLife() {
   }
 }
 
+
+static uint8_t meanTargetBrightness() {
+  uint32_t total = 0;
+  uint32_t count = 0;
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    for (uint8_t x = 0; x < panelWidth; x++) {
+      if (nextRows[y] & bitForX[x]) {
+        total += bright8(matrix.pixels[y * MATRIX_WIDTH + x]);
+        count++;
+      }
+    }
+  }
+  return count ? static_cast<uint8_t>(total / count) : 0;
+}
+
+static int checkEmptyTransition() {
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    currentRows[y] = RowBits(0, 0);
+  }
+  matrix.pixels.fill(0);
+  for (uint16_t index = 0; index < kTestCellCount; index++) {
+    drawnColor[index] = 0;
+  }
+  gClockAnimation = {};
+
+  if (!beginClockAnimation(kClockAnimationMinute, 12, 35, 0x87654321UL, 0,
+                           kClockMinuteAnimationMs) ||
+      !clockTransitionActive(0)) {
+    std::printf("FAIL: empty board did not start the transition reveal\n");
+    return 1;
+  }
+
+  const uint32_t sampleTimes[] = {0, kClockTransitionMoveMs / 2,
+                                  kClockTransitionMoveMs - 33,
+                                  kClockTransitionMoveMs + 33};
+  uint8_t brightness[4] = {};
+  for (uint8_t i = 0; i < 4; i++) {
+    gNowMs = sampleTimes[i];
+    gNowMicros = sampleTimes[i] * 1000;
+    renderClockAnimationFrame(sampleTimes[i]);
+    brightness[i] = meanTargetBrightness();
+  }
+
+  if (brightness[0] != 0 || brightness[1] < 24 || brightness[2] <= brightness[1] ||
+      brightness[3] + 16 < brightness[2]) {
+    std::printf("FAIL: empty transition brightness was not gradual (%u,%u,%u,%u)\n",
+                brightness[0], brightness[1], brightness[2], brightness[3]);
+    return 1;
+  }
+  gClockAnimation = {};
+  return 0;
+}
+
 // Tolerance: once the pixels have gathered, the clock face must be essentially
 // fully lit within this window. Larger gaps are the "pixels landed but the clock
 // hasn't started yet" pause we are guarding against.
@@ -123,6 +218,8 @@ struct FrameSample {
 
 static int traceMinuteAnimation() {
   configureHarnessBounds();
+  if (checkTransitionGeometry() != 0) return 1;
+  if (checkEmptyTransition() != 0) return 1;
   seedGreenHeavyLife();
   generation = 42;
   motionGlow = 0;
@@ -134,7 +231,7 @@ static int traceMinuteAnimation() {
   }
 
   // The precomputed face (nextRows) is the set of digit-shape target pixels.
-  std::array<bool, MATRIX_WIDTH * 64> isTarget = {};
+  std::array<bool, kTestCellCount> isTarget = {};
   uint32_t targetCount = 0;
   for (uint8_t y = 0; y < panelHeight; y++) {
     for (uint8_t x = 0; x < panelWidth; x++) {
@@ -150,7 +247,7 @@ static int traceMinuteAnimation() {
   }
 
   // The colon cells must visibly blink; collect their locations.
-  std::array<bool, MATRIX_WIDTH * 64> isColon = {};
+  std::array<bool, kTestCellCount> isColon = {};
   uint32_t colonCount = 0;
   for (uint8_t y = 0; y < panelHeight; y++) {
     for (uint8_t x = 0; x < panelWidth; x++) {
@@ -282,6 +379,18 @@ static int traceMinuteAnimation() {
     return 1;
   }
 
+  std::array<uint16_t, kTestCellCount> displayed = matrix.pixels;
+  commitClockFaceToLife();
+  for (uint16_t index = 0; index < displayed.size(); index++) {
+    if (drawnColor[index] != displayed[index]) {
+      std::printf("FAIL: clock release changed framebuffer cache at index %u "
+                  "(displayed=0x%04x cached=0x%04x)\n",
+                  index, displayed[index], drawnColor[index]);
+      return 1;
+    }
+  }
+
+  std::printf("clock minute geometry: %ux%u\n", panelWidth, panelHeight);
   std::printf("clock minute trace: no green pixels across rendered frames\n");
   std::printf("clock minute timing: gathered=%lums, full-bright=%lums (gap=%lums <= %lums), peak=%u%%\n",
               static_cast<unsigned long>(gatherDoneMs),
