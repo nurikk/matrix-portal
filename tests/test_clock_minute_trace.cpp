@@ -124,6 +124,14 @@ static int checkTransitionGeometry() {
     std::printf("FAIL: 128-wide transition interpolation did not take the shortest wrapped path\n");
     return 1;
   }
+
+  uint32_t revealStartsAt = kClockTransitionMoveMs - kClockTransitionOverlapMs;
+  if (clockTransitionOverlapProgress(revealStartsAt, kClockTransitionMoveMs) != 0 ||
+      clockTransitionOverlapProgress(revealStartsAt + kClockTransitionOverlapMs / 2,
+                                     kClockTransitionMoveMs) == 0) {
+    std::printf("FAIL: target face reveal did not stay hidden until the arrival window\n");
+    return 1;
+  }
   return 0;
 }
 
@@ -178,14 +186,14 @@ static int checkEmptyTransition() {
 
   if (!beginClockAnimation(kClockAnimationMinute, 12, 35, 0x87654321UL, 0,
                            kClockMinuteAnimationMs) ||
-      !clockTransitionActive(0)) {
-    std::printf("FAIL: empty board did not start the transition reveal\n");
+      clockTransitionActive(0)) {
+    std::printf("FAIL: empty board did not use the fallback clock reveal\n");
     return 1;
   }
 
-  const uint32_t sampleTimes[] = {0, kClockTransitionMoveMs / 2,
-                                  kClockTransitionMoveMs - 33,
-                                  kClockTransitionMoveMs + 33};
+  const uint32_t sampleTimes[] = {0, kClockMinuteAnimationMs / 2,
+                                  kClockMinuteAnimationMs - 33,
+                                  kClockMinuteAnimationMs + 33};
   uint8_t brightness[4] = {};
   for (uint8_t i = 0; i < 4; i++) {
     gNowMs = sampleTimes[i];
@@ -194,7 +202,7 @@ static int checkEmptyTransition() {
     brightness[i] = meanTargetBrightness();
   }
 
-  if (brightness[0] != 0 || brightness[1] < 24 || brightness[2] <= brightness[1] ||
+  if (brightness[0] != 0 || brightness[1] == 0 || brightness[2] <= brightness[1] ||
       brightness[3] + 16 < brightness[2]) {
     std::printf("FAIL: empty transition brightness was not gradual (%u,%u,%u,%u)\n",
                 brightness[0], brightness[1], brightness[2], brightness[3]);

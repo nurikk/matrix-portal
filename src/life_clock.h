@@ -27,7 +27,7 @@ struct ClockAnimationState {
 constexpr uint16_t kClockHourAnimationMs = 12000;
 constexpr uint16_t kClockTransitionMoveMs = 3800;
 constexpr uint16_t kClockTransitionFadeMs = 3200;
-constexpr uint16_t kClockTransitionOverlapMs = 1200;
+constexpr uint16_t kClockTransitionOverlapMs = 400;
 constexpr uint8_t kClockTransitionFadeColorStep = 12;
 constexpr uint16_t kClockMinuteAnimationMs = kClockTransitionMoveMs + kClockTransitionFadeMs;
 constexpr uint8_t kClockMinuteMoveArrivalScale = 72;
@@ -294,7 +294,8 @@ uint16_t clockTransitionMoveDurationMs() {
 }
 
 bool clockTransitionActive(uint32_t nowMs) {
-  if (gClockAnimation.kind == kClockAnimationNone || gClockMoveTargetCount == 0) {
+  if (gClockAnimation.kind == kClockAnimationNone || gClockMoveSourceCount == 0 ||
+      gClockMoveTargetCount == 0) {
     return false;
   }
   uint16_t durationMs = clockTransitionMoveDurationMs();
@@ -315,11 +316,6 @@ uint8_t clockTransitionProgress(uint32_t nowMs, uint16_t durationMs) {
 uint8_t clockTransitionOverlapProgress(uint32_t nowMs, uint16_t moveDurationMs) {
   uint16_t overlapMs = moveDurationMs < kClockTransitionOverlapMs ? moveDurationMs
                                                                   : kClockTransitionOverlapMs;
-  if (gClockMoveSourceCount < gClockMoveTargetCount && gClockMoveTargetCount > 0) {
-    uint16_t shortfall = gClockMoveTargetCount - gClockMoveSourceCount;
-    uint16_t extraRange = moveDurationMs - overlapMs;
-    overlapMs += (static_cast<uint32_t>(extraRange) * shortfall) / gClockMoveTargetCount;
-  }
   if (overlapMs == 0) {
     return 255;
   }
@@ -1279,12 +1275,7 @@ void renderClockTransitionTargetOverlay(uint32_t nowMs, const RowBits *targetRow
     return;
   }
 
-  uint8_t sourceCoverage = gClockMoveSourceCount >= gClockMoveTargetCount
-                               ? 255
-                               : static_cast<uint8_t>((static_cast<uint32_t>(gClockMoveSourceCount) * 255) /
-                                                      gClockMoveTargetCount);
-  uint8_t startWeight = (static_cast<uint16_t>(kClockMinuteMoveArrivalScale) * sourceCoverage) / 255;
-  uint8_t targetWeight = clockLerp8(startWeight, 255, overlapProgress);
+  uint8_t targetWeight = clockLerp8(kClockMinuteMoveArrivalScale, 255, overlapProgress);
   ClockHourRenderState hourState = clockHourRenderStateFor(nowMs);
   for (uint8_t y = 0; y < panelHeight; y++) {
     RowBits row = targetRows[y] & activeMask;
@@ -1389,7 +1380,7 @@ void renderClockAnimationFrame(uint32_t nowMs) {
   updatedPixels = 0;
   uint8_t progress = clockAnimationProgress(nowMs);
   uint8_t eased = clockSmoothstep8(progress);
-  bool moveSettled = gClockMoveTargetCount > 0;
+  bool moveSettled = gClockMoveSourceCount > 0 && gClockMoveTargetCount > 0;
   bool fullReveal = gClockAnimation.fastReveal || moveSettled;
   bool snapToTarget = gClockAnimation.fastReveal && !moveSettled &&
                       gClockAnimation.kind == kClockAnimationHour;
