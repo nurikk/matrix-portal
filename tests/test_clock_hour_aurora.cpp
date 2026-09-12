@@ -1,7 +1,6 @@
 // Host trace for the hourly (weather) clock animation. Renders the full hour
 // animation -- gather + weather face -- for every weather icon and temperature
-// branch and fails if any pixel reads as green/cyan/yellow. White, blue,
-// magenta, pink and red are allowed; only an actual green tint fails.
+// branch, including rendered Aurora palette coverage.
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -52,11 +51,15 @@ static uint8_t red8(uint16_t c) { return ((c >> 11) & 0x1F) * 255 / 31; }
 static uint8_t green8(uint16_t c) { return ((c >> 5) & 0x3F) * 255 / 63; }
 static uint8_t blue8(uint16_t c) { return (c & 0x1F) * 255 / 31; }
 
-// Green/cyan/yellow tint: green channel is prominent and clearly exceeds red or
-// blue. White/gray (balanced channels), blue, magenta, pink and red all pass.
-static bool isGreenish(uint16_t c) {
+static bool isCoolAurora(uint16_t c) {
   int r = red8(c), g = green8(c), b = blue8(c);
-  return g > 40 && (g > r + 24 || g > b + 24);
+  return b > 48 && (b > r + 12 || g > r + 12);
+}
+
+
+static bool isWarmGold(uint16_t c) {
+  int r = red8(c), g = green8(c), b = blue8(c);
+  return r > 80 && g > 45 && r > b + 35 && g > b + 20;
 }
 
 static void configureHarnessBounds() {
@@ -73,7 +76,7 @@ static void seedLifeHarness() {
       if (((x * 7 + y * 11) % 5) != 0) {
         currentRows[y] |= bitForX[x];
         cellType[index] = 1;
-        cellHue[index] = 96 + ((x + y) & 31);   // green/cyan source life, to stress the gather
+        cellHue[index] = 64 + ((x + y) & 63);   // broad source hues to stress palette gathering
         cellSat[index] = 230; cellAge[index] = 12;
         visualHue[index] = cellHue[index]; visualSat[index] = cellSat[index]; visualValue[index] = 220;
         drawnColor[index] = hsv565(cellHue[index], cellSat[index], visualValue[index]);
@@ -89,6 +92,8 @@ struct Scenario {
   uint8_t code;
   int16_t tempTenths;
   uint8_t unitsF;
+  uint8_t expectedIconHue;
+  uint8_t expectedTempHue;
 };
 
 static int runScenario(const Scenario &s) {
@@ -105,6 +110,8 @@ static int runScenario(const Scenario &s) {
   gTestWeather.lowTemperatureTenths = s.tempTenths - 60;
   gTestWeather.windSpeedTenths = 123;
 
+
+
   configureHarnessBounds();
   seedLifeHarness();
   generation = 7; motionGlow = 0;
@@ -116,33 +123,51 @@ static int runScenario(const Scenario &s) {
     return 1;
   }
 
+
+  bool foundExpectedIconHue = false;
+  for (uint8_t y = 0; y < panelHeight && !foundExpectedIconHue; y++) {
+    for (uint8_t x = 0; x < panelWidth; x++) {
+      Hsv icon;
+      if (clockWeatherIconPixel(x, y, icon) && icon.h == s.expectedIconHue) {
+        foundExpectedIconHue = true;
+        break;
+      }
+    }
+  }
+  if (!foundExpectedIconHue) {
+    std::printf("FAIL[%s]: weather icon missing expected Aurora hue %u\n",
+                s.name, s.expectedIconHue);
+    return 1;
+  }
+  if (s.valid && clockWeatherTempHue(gClockWeather) != s.expectedTempHue) {
+    std::printf("FAIL[%s]: temperature hue %u, expected %u\n", s.name,
+                clockWeatherTempHue(gClockWeather), s.expectedTempHue);
+    return 1;
+  }
+
   // Snapshot the weather-face target pixels so we can confirm the face actually
-  // lights up (de-greening to red/blue could re-trigger the approachColor565 freeze).
+  // lights up and renders the cool Aurora range.
   std::array<bool, MATRIX_WIDTH * 64> isTarget = {};
   uint32_t targetCount = 0;
   for (uint8_t y = 0; y < panelHeight; y++)
     for (uint8_t x = 0; x < panelWidth; x++)
       if (nextRows[y] & bitForX[x]) { isTarget[y * MATRIX_WIDTH + x] = true; targetCount++; }
 
-  uint32_t lateBrightSum = 0, lateSamples = 0;
+  uint32_t lateBrightSum = 0, lateSamples = 0, lateCoolSamples = 0, lateWarmSamples = 0;
   for (uint32_t now = 0; now <= kClockHourAnimationMs; now += 33) {
     gNowMs = now; gNowMicros = now * 1000;
     renderClockAnimationFrame(now);
     for (uint8_t y = 0; y < panelHeight; y++) {
       for (uint8_t x = 0; x < panelWidth; x++) {
         uint16_t c = matrix.pixels[y * MATRIX_WIDTH + x];
-        if (isGreenish(c)) {
-          std::printf("FAIL[%s]: green pixel t=%lums stage=%s x=%u y=%u rgb=(%u,%u,%u) color=0x%04x\n",
-                      s.name, static_cast<unsigned long>(now),
-                      now < kClockTransitionMoveMs ? "gather" : "weather",
-                      x, y, red8(c), green8(c), blue8(c), c);
-          return 1;
-        }
         if (now >= 9000 && isTarget[y * MATRIX_WIDTH + x]) {
           uint8_t r = red8(c), g = green8(c), b = blue8(c);
           uint8_t m = r > g ? r : g; m = m > b ? m : b;
           lateBrightSum += m;
           lateSamples++;
+          if (isCoolAurora(c)) lateCoolSamples++;
+
+          if (isWarmGold(c)) lateWarmSamples++;
         }
       }
     }
@@ -156,25 +181,34 @@ static int runScenario(const Scenario &s) {
                 s.name, static_cast<unsigned long>(meanLate));
     return 1;
   }
+  if (lateCoolSamples == 0) {
+    std::printf("FAIL[%s]: rendered weather face contains no cool Aurora colors\n", s.name);
+    return 1;
+  }
+
+  if (s.valid && lateWarmSamples == 0) {
+    std::printf("FAIL[%s]: rendered weather face contains no warm Aurora accent\n", s.name);
+    return 1;
+  }
   return 0;
 }
 
 int main() {
   const Scenario scenarios[] = {
-      {"rain", true, 61, 150, 0},
-      {"snow", true, 73, -20, 0},
-      {"storm", true, 95, 210, 0},
-      {"clear", true, 0, 350, 0},
-      {"cloud", true, 3, 180, 0},
-      {"hot-F", true, 1, 880, 1},
-      {"cold-F", true, 1, 350, 1},
-      {"mid-C", true, 2, 150, 0},
-      {"invalid", false, 3, 0, 0},
+      {"rain", true, 61, 150, 0, 132, 202},
+      {"snow", true, 73, -20, 0, 112, 166},
+      {"storm", true, 95, 210, 0, 34, 202},
+      {"clear", true, 0, 350, 0, 34, 34},
+      {"cloud", true, 3, 180, 0, 154, 202},
+      {"hot-F", true, 1, 880, 1, 34, 34},
+      {"cold-F", true, 1, 350, 1, 34, 166},
+      {"mid-C", true, 2, 150, 0, 154, 202},
+      {"invalid", false, 3, 0, 0, 154, 0},
   };
   for (const auto &s : scenarios) {
     if (runScenario(s) != 0) return 1;
   }
-  std::printf("clock hour de-green: no green/cyan pixels across %zu weather scenarios\n",
+  std::printf("clock hour Aurora palette rendered across %zu weather scenarios\n",
               sizeof(scenarios) / sizeof(scenarios[0]));
   return 0;
 }

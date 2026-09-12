@@ -52,7 +52,9 @@ struct NeighborMix {
 // RowBits and the bitwise Game of Life core live in life_bits.h so they can be
 // unit-tested on the host (tests/test_life_bits.cpp).
 
-const uint8_t speciesHues[kTypeCount] = {128, 86, 214, 24, 160, 0};
+constexpr uint8_t kAuroraHueMin = 104;
+constexpr uint8_t kAuroraHueMax = 212;
+const uint8_t speciesHues[kTypeCount] = {108, 122, 140, 160, 184, 208};
 
 uint8_t panelWidth = kMaxWidth;
 uint8_t panelHeight = kMaxHeight;

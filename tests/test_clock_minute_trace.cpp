@@ -76,8 +76,14 @@ static uint8_t bright8(uint16_t color) {
   return m > b ? m : b;
 }
 
-static bool hasVisibleGreen(uint16_t color) {
-  return green8(color) > 8;
+static bool isCoolAurora(uint16_t color) {
+  int r = red8(color), g = green8(color), b = blue8(color);
+  return b > 48 && (b > r + 12 || g > r + 12);
+}
+
+static bool isWarmGold(uint16_t color) {
+  int r = red8(color), g = green8(color), b = blue8(color);
+  return r > 80 && g > 45 && r > b + 35 && g > b + 20;
 }
 
 static void configureHarnessBounds() {
@@ -90,6 +96,53 @@ static void configureHarnessBounds() {
   }
 }
 
+
+static int checkLifeAuroraPalette() {
+  rngState = 0x43D12F5B;
+  for (uint8_t type = 0; type < kTypeCount; type++) {
+    for (uint16_t sample = 0; sample < 512; sample++) {
+      uint8_t hue = relatedHue(type);
+      uint8_t mutated = mutateHue(hue);
+      if (hue < kAuroraHueMin || hue > kAuroraHueMax ||
+          mutated < kAuroraHueMin || mutated > kAuroraHueMax) {
+        std::printf("FAIL: generated Life hue escaped the Aurora range (%u -> %u)\n",
+                    hue, mutated);
+        return 1;
+      }
+    }
+  }
+
+  const uint16_t index = 0;
+  generation = 0;
+  motionGlow = 0;
+  cellType[index] = 0;
+  cellHue[index] = 120;
+  cellSat[index] = 220;
+  visualHue[index] = 132;
+  visualSat[index] = 180;
+
+  cellAge[index] = 10;
+  Hsv mature = targetColorFor(index, 0, 0, true);
+  cellAge[index] = 0;
+  Hsv newborn = targetColorFor(index, 0, 0, true);
+  cellAge[index] = 80;
+  Hsv old = targetColorFor(index, 0, 0, true);
+  Hsv trail = targetColorFor(index, 0, 0, false);
+
+  if (newborn.h > 70 || newborn.s >= mature.s || newborn.v <= mature.v) {
+    std::printf("FAIL: newborn target is not a warm ivory/gold flash\n");
+    return 1;
+  }
+  if (old.v >= mature.v || old.h <= mature.h) {
+    std::printf("FAIL: older target does not trend cooler and dimmer\n");
+    return 1;
+  }
+  if (trail.h != visualHue[index] || trail.s != visualSat[index] || trail.v != 0) {
+    std::printf("FAIL: dead-cell trail does not retain color while fading to black\n");
+    return 1;
+  }
+  return 0;
+}
 
 static int checkTransitionGeometry() {
   const uint8_t expected[4][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
@@ -135,7 +188,7 @@ static int checkTransitionGeometry() {
   return 0;
 }
 
-static void seedGreenHeavyLife() {
+static void seedOffPaletteLife() {
   for (uint8_t y = 0; y < panelHeight; y++) {
     currentRows[y] = RowBits(0, 0);
     uint16_t base = y * kMaxWidth;
@@ -144,7 +197,7 @@ static void seedGreenHeavyLife() {
       if (((x * 7 + y * 11) % 5) != 0) {
         currentRows[y] |= bitForX[x];
         cellType[index] = 1;
-        cellHue[index] = 96 + ((x + y) & 31);   // deliberately green/cyan source life
+        cellHue[index] = 64 + ((x + y) & 63);   // broad source hues to stress palette gathering
         cellSat[index] = 230;
         cellAge[index] = 12;
         visualHue[index] = cellHue[index];
@@ -226,9 +279,10 @@ struct FrameSample {
 
 static int traceMinuteAnimation() {
   configureHarnessBounds();
+  if (checkLifeAuroraPalette() != 0) return 1;
   if (checkTransitionGeometry() != 0) return 1;
   if (checkEmptyTransition() != 0) return 1;
-  seedGreenHeavyLife();
+  seedOffPaletteLife();
   generation = 42;
   motionGlow = 0;
 
@@ -272,6 +326,8 @@ static int traceMinuteAnimation() {
   }
 
   std::vector<FrameSample> samples;
+  uint32_t coolAuroraSamples = 0;
+  uint32_t warmGoldSamples = 0;
   for (uint32_t now = 0; now <= kClockMinuteAnimationMs; now += 33) {
     gNowMs = now;
     gNowMicros = now * 1000;
@@ -283,17 +339,14 @@ static int traceMinuteAnimation() {
     for (uint8_t y = 0; y < panelHeight; y++) {
       for (uint8_t x = 0; x < panelWidth; x++) {
         uint16_t color = matrix.pixels[y * MATRIX_WIDTH + x];
-        if (hasVisibleGreen(color)) {
-          std::printf("FAIL: green pixel frame_ms=%lu stage=%s x=%u y=%u rgb=(%u,%u,%u) color=0x%04x\n",
-                      static_cast<unsigned long>(now),
-                      now < kClockTransitionMoveMs ? "move" : "fade",
-                      x, y, red8(color), green8(color), blue8(color), color);
-          return 1;
-        }
         uint8_t b = bright8(color);
         if (isColon[y * MATRIX_WIDTH + x]) colonBrightSum += b;
         if (isTarget[y * MATRIX_WIDTH + x]) {
           targetBrightSum += b;
+          if (now >= kClockTransitionMoveMs) {
+            if (isCoolAurora(color)) coolAuroraSamples++;
+            if (isWarmGold(color)) warmGoldSamples++;
+          }
         } else if (b > 24) {
           offTargetLit++;
         }
@@ -302,6 +355,13 @@ static int traceMinuteAnimation() {
     uint8_t meanPct = static_cast<uint8_t>((targetBrightSum * 100UL) / (targetCount * 255UL));
     uint8_t colonBright = static_cast<uint8_t>(colonBrightSum / colonCount);
     samples.push_back({now, offTargetLit, meanPct, colonBright});
+  }
+
+  if (coolAuroraSamples == 0 || warmGoldSamples == 0) {
+    std::printf("FAIL: rendered minute palette missing Aurora colors (cool=%lu gold=%lu)\n",
+                static_cast<unsigned long>(coolAuroraSamples),
+                static_cast<unsigned long>(warmGoldSamples));
+    return 1;
   }
 
   // Gather complete: movers in transit have collapsed onto the digit shape.
@@ -399,7 +459,9 @@ static int traceMinuteAnimation() {
   }
 
   std::printf("clock minute geometry: %ux%u\n", panelWidth, panelHeight);
-  std::printf("clock minute trace: no green pixels across rendered frames\n");
+  std::printf("clock minute palette: cool Aurora=%lu, warm gold=%lu rendered samples\n",
+              static_cast<unsigned long>(coolAuroraSamples),
+              static_cast<unsigned long>(warmGoldSamples));
   std::printf("clock minute timing: gathered=%lums, full-bright=%lums (gap=%lums <= %lums), peak=%u%%\n",
               static_cast<unsigned long>(gatherDoneMs),
               static_cast<unsigned long>(brightReachedMs),

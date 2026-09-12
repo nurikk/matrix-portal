@@ -24,5 +24,5 @@ run_clock_trace -DMATRIX_WIDTH=128 -DMATRIX_TILE=1
 run_clock_trace -DMATRIX_WIDTH=128 -DMATRIX_TILE=2
 
 OUT_HOUR="$(mktemp -t test_hour.XXXXXX)"
-"$CXX" -std=c++17 -O2 -Wall -Wextra "$DIR/test_clock_hour_degreen.cpp" -o "$OUT_HOUR"
+"$CXX" -std=c++17 -O2 -Wall -Wextra "$DIR/test_clock_hour_aurora.cpp" -o "$OUT_HOUR"
 "$OUT_HOUR"

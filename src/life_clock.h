@@ -454,8 +454,8 @@ bool clockDigitalColonCell(uint8_t col, uint8_t row) {
 }
 
 uint8_t clockMinutePaletteHue(uint8_t x, uint8_t y, uint8_t phase = 0) {
-  const uint8_t hues[6] = {204, 214, 224, 238, 252, 0};
-  return hues[(x * 3 + y * 5 + phase) % 6];
+  const uint8_t hues[7] = {208, 112, 128, 148, 168, 192, 34};
+  return hues[(x * 3 + y * 5 + phase) % 7];
 }
 
 bool clockDigitalPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &hsv) {
@@ -480,7 +480,7 @@ bool clockDigitalPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &
   }
   if (col == 8) {
     if (!clockDigitalColonCell(col, row)) return false;
-    hsv = {238, 255, 220};
+    hsv = {34, 210, 230};
     return true;
   }
   if (col >= 10 && col < 13) {
@@ -614,15 +614,15 @@ uint16_t clockRoundedUnsignedTenths(uint16_t tenths) {
 
 uint8_t clockWeatherTempHue(const WeatherSnapshot &w) {
   int16_t t = clockRoundedWeatherTemp(w);
-  // Green-free temperature gradient: cold = blue, mid = magenta, hot = red.
+  // Aurora temperature gradient: cold = blue, mid = violet, hot = warm gold.
   if (w.unitsF) {
-    if (t <= 40) return 178;
-    if (t >= 82) return 250;
+    if (t <= 40) return 166;
+    if (t >= 82) return 34;
   } else {
-    if (t <= 5) return 178;
-    if (t >= 28) return 250;
+    if (t <= 5) return 166;
+    if (t >= 28) return 34;
   }
-  return 216;
+  return 202;
 }
 
 uint8_t clockMinuteColonScale(uint32_t elapsedMs) {
@@ -665,8 +665,8 @@ uint16_t clockMinuteAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
     if (inGrid && clockDigitalColonCell(col, row)) {
       uint8_t colon = clockMinuteColonScale(elapsedMs);
       targetWeight = (static_cast<uint16_t>(targetWeight) * colon) / 255;
-      hue = 238;
-      sat = 255;
+      hue = 34;
+      sat = 210;
       value = addSaturated(190, colon >> 2);
     }
 
@@ -752,13 +752,13 @@ bool clockWeatherIconPixel(uint8_t x, uint8_t y, Hsv &hsv) {
         clockDiscPixel(x, y, cx + r / 5, cy - r / 2, (r * 3) / 5) ||
         clockDiscPixel(x, y, cx + r / 2, cy - r / 5, r / 2) ||
         (y >= cy - r / 4 && y <= cy + r / 5 && absDiff16(x, cx) <= r)) {
-      hsv = {184, 120, 180};
+      hsv = {148, 120, 180};
       return true;
     }
     for (int8_t i = -1; i <= 1; i++) {
       int16_t sx = cx + i * (r / 2);
       if (clockNearLine(x, y, sx, cy + r / 2, sx - r / 4, cy + r + 2, 1)) {
-        hsv = {186, 210, 235};
+        hsv = {132, 210, 235};
         return true;
       }
     }
@@ -772,7 +772,7 @@ bool clockWeatherIconPixel(uint8_t x, uint8_t y, Hsv &hsv) {
       if (clockDiscPixel(x, y, px, py, md >= 96 ? 2 : 1) ||
           clockNearLine(x, y, px - r / 5, py, px + r / 5, py, 1) ||
           clockNearLine(x, y, px, py - r / 5, px, py + r / 5, 1)) {
-        hsv = {186, 60, 245};
+        hsv = {112, 60, 245};
         return true;
       }
     }
@@ -786,7 +786,7 @@ bool clockWeatherIconPixel(uint8_t x, uint8_t y, Hsv &hsv) {
         clockNearLine(x, y, cx + r / 3, cy - r / 2, cx - r / 5, cy + r / 5, 2) ||
         clockNearLine(x, y, cx - r / 5, cy + r / 5, cx + r / 5, cy + r / 5, 2) ||
         clockNearLine(x, y, cx + r / 5, cy + r / 5, cx - r / 3, cy + r, 2)) {
-      hsv = {0, 0, 250};   // white lightning (no green)
+      hsv = {34, 45, 250};   // warm ivory lightning
       return true;
     }
     return false;
@@ -794,14 +794,14 @@ bool clockWeatherIconPixel(uint8_t x, uint8_t y, Hsv &hsv) {
 
   if (code <= 1) {
     if (clockRingPixel(x, y, cx, cy, r, 1) || clockDiscPixel(x, y, cx, cy, r / 2)) {
-      hsv = {248, 220, 245};
+      hsv = {34, 220, 245};
       return true;
     }
     for (uint8_t i = 0; i < 8; i++) {
       uint8_t tick = i * 60 / 8;
       if (clockNearLine(x, y, clockPointX(cx, r + 2, tick), clockPointY(cy, r + 2, tick),
                         clockPointX(cx, r + r / 2, tick), clockPointY(cy, r + r / 2, tick), 1)) {
-        hsv = {248, 200, 210};
+        hsv = {34, 200, 210};
         return true;
       }
     }
@@ -813,7 +813,7 @@ bool clockWeatherIconPixel(uint8_t x, uint8_t y, Hsv &hsv) {
         clockDiscPixel(x, y, cx, cy - r / 3, (r * 2) / 3) ||
         clockDiscPixel(x, y, cx + r / 2, cy, r / 2) ||
         (y >= cy && y <= cy + r / 3 && absDiff16(x, cx) <= r)) {
-      hsv = {184, 85, static_cast<uint8_t>(gClockWeatherValid ? 205 : 120)};
+      hsv = {154, 85, static_cast<uint8_t>(gClockWeatherValid ? 205 : 120)};
       return true;
     }
   }
@@ -843,11 +843,11 @@ bool clockWeatherPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &
   int16_t tempY = (panelHeight * 35) / 100 - (5 * tempScale) / 2;
 
   if (clockTextPixel(timeText, timeX, timeY, timeScale, x, y)) {
-    hsv = {184, 190, 235};
+    hsv = {190, 190, 235};
     return true;
   }
   if (clockTextPixel(tempText, tempX, tempY, tempScale, x, y)) {
-    hsv = {static_cast<uint8_t>(gClockWeatherValid ? clockWeatherTempHue(gClockWeather) : 184),
+    hsv = {static_cast<uint8_t>(gClockWeatherValid ? clockWeatherTempHue(gClockWeather) : 154),
            static_cast<uint8_t>(gClockWeatherValid ? 230 : 120),
            static_cast<uint8_t>(gClockWeatherValid ? 252 : 130)};
     return true;
@@ -874,19 +874,19 @@ bool clockWeatherPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &
     int16_t windX = (static_cast<int16_t>(panelWidth) - clockTextWidth(windText, metricScale)) / 2;
     int16_t highLowX = (static_cast<int16_t>(panelWidth) - clockTextWidth(highLowText, metricScale)) / 2;
     if (clockTextPixel(feelsText, feelsX, metricsY, metricScale, x, y)) {
-      hsv = {200, 165, 210};
+      hsv = {202, 165, 210};
       return true;
     }
     if (clockTextPixel(rainText, rainX, metricsY + 5 * metricScale + gap, metricScale, x, y)) {
-      hsv = {184, 190, 230};
+      hsv = {132, 190, 230};
       return true;
     }
     if (clockTextPixel(windText, windX, metricsY + 10 * metricScale + 2 * gap, metricScale, x, y)) {
-      hsv = {196, 145, 220};
+      hsv = {112, 145, 220};
       return true;
     }
     if (clockTextPixel(highLowText, highLowX, metricsY + 15 * metricScale + 3 * gap, metricScale, x, y)) {
-      hsv = {248, 190, 225};
+      hsv = {34, 190, 225};
       return true;
     }
   }
@@ -962,7 +962,7 @@ bool clockHourNumeralPixel(uint8_t hour, uint8_t x, uint8_t y, Hsv &hsv) {
     return false;
   }
 
-  hsv = {wrapHue(18 + hour12 * 9), 225, 250};
+  hsv = {static_cast<uint8_t>(184 + (hour12 % 3) * 10), 225, 250};
   return true;
 }
 
@@ -986,15 +986,15 @@ bool clockAnalogPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &h
   }
 
   if (clockNearLine(x, y, cx, cy, hourX, hourY, handThickness + 1)) {
-    hsv = {24, 230, 250};
+    hsv = {34, 220, 250};
     return true;
   }
   if (clockNearLine(x, y, cx, cy, minuteX, minuteY, handThickness)) {
-    hsv = {136, 220, 242};
+    hsv = {146, 220, 242};
     return true;
   }
   if (clockDiscPixel(x, y, cx, cy, md / 32 + 1)) {
-    hsv = {108, 120, 255};
+    hsv = {112, 120, 255};
     return true;
   }
 
@@ -1008,7 +1008,8 @@ bool clockAnalogPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &h
     int16_t innerY = clockPointY(cy, inner, tick);
     if (clockNearLine(x, y, innerX, innerY, outerX, outerY,
                       major ? ringThickness + 1 : ringThickness)) {
-      hsv = {wrapHue(150 + i * 8), static_cast<uint8_t>(major ? 150 : 175),
+      hsv = {static_cast<uint8_t>(148 + (i % 6) * 11),
+             static_cast<uint8_t>(major ? 150 : 175),
              static_cast<uint8_t>(major ? 235 : 175)};
       return true;
     }
@@ -1022,20 +1023,20 @@ bool clockAnalogPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &h
       int16_t dotX = clockPointX(cx, dotDistance, i);
       int16_t dotY = clockPointY(cy, dotDistance, i);
       if (clockDiscPixel(x, y, dotX, dotY, dotRadius)) {
-        hsv = {168, 150, 105};
+        hsv = {126, 150, 105};
         return true;
       }
     }
   }
 
   if (clockRingPixel(x, y, cx, cy, radius, ringThickness)) {
-    hsv = {158, 180, 95};
+    hsv = {188, 180, 95};
     return true;
   }
 
   uint8_t innerRadius = (radius * 72) / 100;
   if (clockRingPixel(x, y, cx, cy, innerRadius, 1)) {
-    hsv = {188, 160, 55};
+    hsv = {112, 160, 55};
     return true;
   }
 
@@ -1086,38 +1087,39 @@ uint16_t clockHourAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
     uint8_t shimmer = triWave6(state.elapsedMs / 48 + x * 2 + y * 3) * 2;
 
     value = addSaturated(value, shimmer);
-    // No hue shimmer: the de-greened palette must stay out of the green sectors.
+    // No hue shimmer: keep the Aurora face colors stable during the value shimmer.
 
     return hsv565(hue, sat, (static_cast<uint16_t>(value) * targetWeight) / 255);
   }
 
   uint8_t code = gClockWeatherValid ? gClockWeather.weatherCode : 3;
   uint8_t accent = 0;
-  // De-greened accents: blue rain/snow, white storm flash, blue->magenta twinkle.
-  uint8_t hue = clockWeatherRainCode(code) ? 184 : (clockWeatherSnowCode(code) ? 184 : 196);
+  // Aurora accents: cyan rain, mint snow, ivory storm flash, teal-to-violet twinkle.
+  uint8_t hue = clockWeatherRainCode(code) ? 132 : (clockWeatherSnowCode(code) ? 112 : 190);
   uint8_t accentSat = 185;
   uint16_t hash = clockPixelHash(x, y, gClockAnimation.eventMinuteId ^ 0xA5A5A5A5UL);
   if (clockWeatherRainCode(code)) {
     uint8_t phase = (state.elapsedMs / 42 + (hash & 31)) & 31;
     if (((x + phase) & 15) == 0 && y > panelHeight / 3) {
       accent = 70 + triWave6((y + phase) & 63);
-      hue = 184;
+      hue = 132;
     }
   } else if (clockWeatherSnowCode(code)) {
     if (((hash + state.elapsedMs / 70) & 0x7F) == 0) {
       accent = 88;
-      hue = 184;
+      hue = 112;
       accentSat = 60;   // pale, snow-like
     }
   } else if (clockWeatherStormCode(code)) {
     if ((hash & 0x1FF) == ((state.elapsedMs / 35) & 0x1FF)) {
       accent = 130;
-      accentSat = 0;    // white lightning flash
+      hue = 34;
+      accentSat = 45;   // warm ivory lightning flash
     }
   } else {
     if ((hash & 0x1FF) == ((state.elapsedMs / 55) & 0x1FF)) {
       accent = 44 + triWave6((state.elapsedMs / 22 + (hash >> 8)) & 63);
-      hue = 178 + (hash & 63);   // 178..241: blue -> magenta, green-free
+      hue = 112 + (hash % 97);   // 112..208: teal -> violet
     }
   }
 
@@ -1245,8 +1247,8 @@ uint16_t clockTransitionMoverColor(uint16_t sourceIndex, uint8_t sourceX, uint8_
                                                     overlapProgress, nowMs);
     return approachColor565(moverColor, targetColor, overlapProgress);
   }
-  // Hour movers wear the de-greened target hue immediately -- the source Life hue
-  // can be green/cyan, so blending through it would wash the gather green.
+  // Hour movers wear the Aurora target hue immediately so the gather stays coherent
+  // instead of blending through the source cell color.
   uint8_t hue = nextHue[targetIndex];
   uint8_t saturation = clockLerp8(source.s, nextSat[targetIndex], progress);
   return hsv565(hue, saturation, value);
@@ -1392,10 +1394,9 @@ void renderClockAnimationFrame(uint32_t nowMs) {
   // overlap window (see renderClockTransitionTargetOverlay / mover arrival), so
   // the post-move phase just holds the lit, lively clock -- no slow brighten.
   uint8_t colorStep = moveFadeIn ? kClockTransitionFadeColorStep : clockColorStep(gClockAnimation.kind);
-  // Once the gathered minute clock is on screen, render its colors directly. Its
-  // palette is intentionally green-free, so the small approachColor565 fade step
-  // can't cross the RGB565 red/blue quantization buckets and the colon/shimmer/
-  // sparkle freeze -- snapping keeps them animating.
+  // Once the gathered minute clock is on screen, render its colors directly. The
+  // small approachColor565 fade step can stall in RGB565 quantization buckets and
+  // freeze the colon/shimmer/sparkle, so snapping keeps them animating.
   bool minuteLive = moveSettled && gClockAnimation.kind == kClockAnimationMinute;
   ClockHourRenderState hourState = clockHourRenderStateFor(nowMs);
 

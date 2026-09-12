@@ -40,37 +40,25 @@ uint8_t approach(uint8_t current, uint8_t target, uint8_t step) {
   return current;
 }
 
+uint8_t clampAuroraHue(int16_t hue) {
+  if (hue < kAuroraHueMin) return kAuroraHueMin;
+  if (hue > kAuroraHueMax) return kAuroraHueMax;
+  return static_cast<uint8_t>(hue);
+}
+
 uint8_t relatedHue(uint8_t type) {
   uint8_t hue = speciesHues[type % kTypeCount];
-  uint8_t roll = random32() & 31;
-
-  if (roll == 0) {
-    return wrapHue(hue + 128); // complement
+  if ((random32() & 31) < 18) {
+    return clampAuroraHue(hue + static_cast<int16_t>((random32() % 17) - 8));
   }
-  if (roll < 4) {
-    return wrapHue(hue + ((random32() & 1) ? 85 : -85)); // triad
-  }
-  if (roll < 18) {
-    return wrapHue(hue + static_cast<int16_t>((random32() % 33) - 16)); // analogous
-  }
-
   return hue;
 }
 
 uint8_t mutateHue(uint8_t hue) {
-  uint8_t roll = random32() & 255;
-
-  if (roll == 0) {
-    return wrapHue(hue + 128);
+  if ((random32() & 255) < 18) {
+    hue = clampAuroraHue(hue + static_cast<int16_t>((random32() % 17) - 8));
   }
-  if (roll < 3) {
-    return wrapHue(hue + ((random32() & 1) ? 85 : -85));
-  }
-  if (roll < 18) {
-    return wrapHue(hue + static_cast<int16_t>((random32() % 25) - 12));
-  }
-
-  return hue;
+  return clampAuroraHue(hue);
 }
 
 void addNeighbor(NeighborMix &mix, uint16_t index) {

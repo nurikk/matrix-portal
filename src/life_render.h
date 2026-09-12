@@ -5,7 +5,7 @@
 
 Hsv targetColorFor(uint16_t index, uint8_t x, uint8_t y, bool alive) {
   if (!alive) {
-    return {visualHue[index], 0, 0};
+    return {visualHue[index], visualSat[index], 0};
   }
 
   uint8_t wave = triWave6(generation * 2 + x * 3 + y * 5 + cellType[index] * 11);
@@ -21,9 +21,16 @@ Hsv targetColorFor(uint16_t index, uint8_t x, uint8_t y, bool alive) {
   }
 
   if (cellAge[index] < 6) {
-    uint8_t bloom = (6 - cellAge[index]) * 26;
-    value = addSaturated(value, bloom);
-    saturation = saturation > bloom ? saturation - bloom : 0;
+    uint8_t warmth = (6 - cellAge[index]) * 36;
+    hue = blendHue(hue, 34, warmth);
+    saturation = static_cast<uint8_t>((static_cast<uint16_t>(saturation) * (255 - warmth) +
+                                       72U * warmth) / 255);
+    value = addSaturated(value, (6 - cellAge[index]) * 24);
+  } else if (cellAge[index] > 20) {
+    uint8_t cooling = cellAge[index] - 20;
+    if (cooling > 40) cooling = 40;
+    hue = approachHue(hue, 168, 1 + (cooling >> 3));
+    value = value > cooling / 2 ? value - cooling / 2 : 0;
   }
 
   return {hue, saturation, value};
