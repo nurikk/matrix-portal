@@ -25,6 +25,9 @@ void configureLifeBounds() {
 }
 
 void seedLife() {
+#if WIFI_PORTAL_ENABLED
+  fillScreenActive = false;
+#endif
   rngState ^= micros() + 0x9E3779B9;
   liveCells = 0;
   changedCells = panelWidth * panelHeight;
@@ -89,10 +92,51 @@ void applyDrawnCells(const uint8_t *mask, uint8_t w, uint8_t h) {
   }
 }
 
+void fillBoard(bool randomColors) {
+  uint8_t sharedHue = static_cast<uint8_t>(random32());
+  uint8_t sharedSat = static_cast<uint8_t>(224 + (random32() & 31));
+  uint8_t sharedValue = static_cast<uint8_t>(208 + (random32() & 31));
+
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    currentRows[y] = activeMask;
+    nextRows[y] = 0;
+    uint16_t baseIndex = static_cast<uint16_t>(y) * kMaxWidth;
+    for (uint8_t x = 0; x < panelWidth; x++) {
+      uint16_t index = baseIndex + x;
+      uint8_t hue = randomColors ? static_cast<uint8_t>(random32()) : sharedHue;
+      uint8_t saturation = randomColors
+                               ? static_cast<uint8_t>(224 + (random32() & 31))
+                               : sharedSat;
+      uint8_t value = randomColors
+                          ? static_cast<uint8_t>(208 + (random32() & 31))
+                          : sharedValue;
+      uint16_t color = hsv565(hue, saturation, value);
+      cellType[index] = 0;
+      cellHue[index] = hue;
+      cellSat[index] = saturation;
+      cellAge[index] = 6;
+      visualHue[index] = hue;
+      visualSat[index] = saturation;
+      visualValue[index] = value;
+      drawnColor[index] = color;
+      forceRedraw[index] = false;
+      matrix.drawPixel(x, y, color);
+    }
+  }
+
+  matrix.show();
+  liveCells = static_cast<uint16_t>(panelWidth) * panelHeight;
+  changedCells = liveCells;
+  generation = 0;
+  fillScreenActive = true;
+  gPaused = true;
+}
+
 // Wipe the board to empty and black. Clear-all also stops the sim (gPaused set here on
 // core 1) so the cleared board persists instead of being instantly refilled by the
 // minLiveCells auto-reseed in stepLife(). Called only from the core-1 loop().
 void clearBoard() {
+  fillScreenActive = false;
   for (uint8_t y = 0; y < panelHeight; y++) {
     currentRows[y] = 0;
     nextRows[y] = 0;
@@ -195,6 +239,9 @@ void commitNextGeneration() {
 }
 
 void stepLife() {
+#if WIFI_PORTAL_ENABLED
+  fillScreenActive = false;
+#endif
   lifeStepsThisPeriod++;
 
   uint16_t nextLiveCells = 0;

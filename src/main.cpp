@@ -162,6 +162,8 @@ void loop() {
   webPortalTick();
   if (gReqReseed) { gReqReseed = false; seedLife(); }
   if (gReqClear)  { gReqClear = false; clearBoard(); }                     // clearBoard() pauses so the empty board persists
+  if (gReqFill)       { gReqFill = false; fillBoard(false); }
+  if (gReqFillRandom) { gReqFillRandom = false; fillBoard(true); }
   if (gReqPause)  { gPaused = (gReqPause > 0); gReqPause = 0; }             // explicit Stop/Resume; overrides clear's implicit pause
   if (gReqForget) { gReqForget = false; WiFi.disconnect(true, true); delay(200); ESP.restart(); }  // blocks ~200ms intentionally — device reboots immediately after
 #endif

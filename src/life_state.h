@@ -27,6 +27,8 @@ volatile bool gReqForget = false;
 volatile bool gPaused = false;     // sim freeze state — written ONLY on core 1 (loop + clearBoard)
 volatile int8_t gReqPause = 0;     // core-0 Stop/Resume request: +1 pause, -1 resume; applied on core 1
 volatile bool gReqClear = false;   // Clear-all deferred action, consumed by loop() on core 1
+volatile bool gReqFill = false;          // Single-color fill deferred action, consumed by loop() on core 1
+volatile bool gReqFillRandom = false;    // Random-color fill deferred action, consumed by loop() on core 1
 volatile uint8_t gReqClockAnimation = 0;   // manual clock animation request, consumed by loop() on core 1
 volatile uint16_t gStatRenderFps = 0;
 volatile uint16_t gStatLifeUps = 0;
@@ -39,6 +41,10 @@ struct Hsv {
   uint8_t s;
   uint8_t v;
 };
+
+#if WIFI_PORTAL_ENABLED
+bool fillScreenActive = false;
+#endif
 
 struct NeighborMix {
   uint8_t count;

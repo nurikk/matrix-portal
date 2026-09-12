@@ -8,6 +8,12 @@ Hsv targetColorFor(uint16_t index, uint8_t x, uint8_t y, bool alive) {
     return {visualHue[index], visualSat[index], 0};
   }
 
+#if WIFI_PORTAL_ENABLED
+  if (fillScreenActive) {
+    return {cellHue[index], cellSat[index], visualValue[index]};
+  }
+#endif
+
   uint8_t wave = triWave6(generation * 2 + x * 3 + y * 5 + cellType[index] * 11);
   uint8_t shimmer = triWave6(generation + x * 4 + y * 2);
   uint8_t hue = wrapHue(cellHue[index] +
