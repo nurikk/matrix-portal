@@ -74,8 +74,7 @@ uint16_t clockMinDimension() {
 }
 
 uint8_t clockSmoothstep8(uint8_t t) {
-  uint32_t x = t;
-  return static_cast<uint8_t>((x * x * (765 - 2 * x)) / 65025);
+  return smoothstep8(t);
 }
 
 uint8_t clockClamp8(uint16_t value) {
@@ -453,9 +452,9 @@ bool clockDigitalColonCell(uint8_t col, uint8_t row) {
   return col == 8 && (row == 1 || row == 3);
 }
 
-uint8_t clockMinutePaletteHue(uint8_t x, uint8_t y, uint8_t phase = 0) {
-  const uint8_t hues[7] = {208, 112, 128, 148, 168, 192, 34};
-  return hues[(x * 3 + y * 5 + phase) % 7];
+uint8_t clockMinutePaletteHue(uint8_t x, uint8_t y) {
+  return 112 + (static_cast<uint16_t>(x) * 80) / (panelWidth - 1) +
+         (static_cast<uint16_t>(y) * 16) / (panelHeight - 1);
 }
 
 bool clockDigitalPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &hsv) {
@@ -470,12 +469,12 @@ bool clockDigitalPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &
 
   if (col < 3) {
     if (!clockDigitPixel(digits[0], col, row)) return false;
-    hsv = {clockMinutePaletteHue(col, row, minute), 255, 235};
+    hsv = {clockMinutePaletteHue(x, y), 245, 255};
     return true;
   }
   if (col >= 4 && col < 7) {
     if (!clockDigitPixel(digits[1], col - 4, row)) return false;
-    hsv = {clockMinutePaletteHue(col, row, minute + 1), 255, 235};
+    hsv = {clockMinutePaletteHue(x, y), 245, 255};
     return true;
   }
   if (col == 8) {
@@ -485,12 +484,12 @@ bool clockDigitalPixel(uint8_t hour, uint8_t minute, uint8_t x, uint8_t y, Hsv &
   }
   if (col >= 10 && col < 13) {
     if (!clockDigitPixel(digits[2], col - 10, row)) return false;
-    hsv = {clockMinutePaletteHue(col, row, minute + 2), 255, 235};
+    hsv = {clockMinutePaletteHue(x, y), 245, 255};
     return true;
   }
   if (col >= 14 && col < 17) {
     if (!clockDigitPixel(digits[3], col - 14, row)) return false;
-    hsv = {clockMinutePaletteHue(col, row, minute + 3), 255, 235};
+    hsv = {clockMinutePaletteHue(x, y), 245, 255};
     return true;
   }
 
@@ -626,11 +625,16 @@ uint8_t clockWeatherTempHue(const WeatherSnapshot &w) {
 }
 
 uint8_t clockMinuteColonScale(uint32_t elapsedMs) {
-  uint16_t phase = elapsedMs % 1000;
-  if (phase < 420) return 255;
-  if (phase < 540) return static_cast<uint8_t>(255 - ((phase - 420) * 205UL) / 120);
-  if (phase < 850) return 50;
-  return static_cast<uint8_t>(50 + ((phase - 850) * 205UL) / 150);
+  uint8_t phase = ((elapsedMs % 1000) * 256UL) / 1000;
+  return 64 + (static_cast<uint16_t>(smoothWave8(phase + 128)) * 191) / 255;
+}
+
+uint8_t clockTwinkle(uint16_t hash, uint32_t elapsedMs) {
+  constexpr uint16_t kTwinklePeriodMs = 8192;
+  constexpr uint16_t kTwinkleDurationMs = 640;
+  uint16_t phase = (elapsedMs + hash) % kTwinklePeriodMs;
+  if (phase >= kTwinkleDurationMs) return 0;
+  return smoothWave8((static_cast<uint32_t>(phase) * 256) / kTwinkleDurationMs);
 }
 
 uint8_t clockMinuteSparkle(uint8_t x, uint8_t y, bool inGrid, uint32_t elapsedMs) {
@@ -639,12 +643,8 @@ uint8_t clockMinuteSparkle(uint8_t x, uint8_t y, bool inGrid, uint32_t elapsedMs
   }
 
   uint16_t hash = clockPixelHash(x, y, gClockAnimation.eventMinuteId);
-  if ((hash & 0x7F) != ((elapsedMs / 85) & 0x7F)) {
-    return 0;
-  }
-
-  uint8_t twinkle = triWave6((elapsedMs / 28 + (hash >> 8)) & 63) * 5;
-  return twinkle > 110 ? 110 : twinkle;
+  if ((hash & 3) != 0) return 0;
+  return (static_cast<uint16_t>(clockTwinkle(hash, elapsedMs)) * 136) / 255;
 }
 
 uint16_t clockMinuteAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
@@ -658,9 +658,8 @@ uint16_t clockMinuteAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
     uint8_t hue = nextHue[index];
     uint8_t sat = nextSat[index];
     uint8_t value = nextType[index];
-    uint8_t shimmer = triWave6(elapsedMs / 46 + x * 3 + y * 5) * 2;
-
-    value = addSaturated(value, shimmer);
+    uint8_t shimmer = smoothWave8(elapsedMs / 24 + x * 2 + y * 3);
+    value = (static_cast<uint16_t>(value) * (232 + (shimmer * 23U) / 255)) / 255;
 
     if (inGrid && clockDigitalColonCell(col, row)) {
       uint8_t colon = clockMinuteColonScale(elapsedMs);
@@ -681,7 +680,7 @@ uint16_t clockMinuteAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
   }
 
   accent = static_cast<uint8_t>((accent * static_cast<uint16_t>(easedProgress)) / 255);
-  return hsv565(clockMinutePaletteHue(x, y, elapsedMs / 96), 255, accent);
+  return hsv565(clockMinutePaletteHue(x, y), 240, accent);
 }
 
 bool clockNearLine(int16_t x, int16_t y, int16_t x0, int16_t y0,
@@ -1084,10 +1083,8 @@ uint16_t clockHourAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
     uint8_t hue = nextHue[index];
     uint8_t sat = nextSat[index];
     uint8_t value = nextType[index];
-    uint8_t shimmer = triWave6(state.elapsedMs / 48 + x * 2 + y * 3) * 2;
-
-    value = addSaturated(value, shimmer);
-    // No hue shimmer: keep the Aurora face colors stable during the value shimmer.
+    uint8_t shimmer = smoothWave8(state.elapsedMs / 28 + x * 2 + y * 3);
+    value = (static_cast<uint16_t>(addSaturated(value, 16)) * (232 + (shimmer * 23U) / 255)) / 255;
 
     return hsv565(hue, sat, (static_cast<uint16_t>(value) * targetWeight) / 255);
   }
@@ -1101,24 +1098,24 @@ uint16_t clockHourAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
   if (clockWeatherRainCode(code)) {
     uint8_t phase = (state.elapsedMs / 42 + (hash & 31)) & 31;
     if (((x + phase) & 15) == 0 && y > panelHeight / 3) {
-      accent = 70 + triWave6((y + phase) & 63);
+      accent = 100 + triWave6((y + phase) & 63);
       hue = 132;
     }
   } else if (clockWeatherSnowCode(code)) {
-    if (((hash + state.elapsedMs / 70) & 0x7F) == 0) {
-      accent = 88;
+    if ((hash & 3) == 0) {
+      accent = (static_cast<uint16_t>(clockTwinkle(hash, state.elapsedMs)) * 120) / 255;
       hue = 112;
       accentSat = 60;   // pale, snow-like
     }
   } else if (clockWeatherStormCode(code)) {
-    if ((hash & 0x1FF) == ((state.elapsedMs / 35) & 0x1FF)) {
-      accent = 130;
+    if ((hash & 7) == 0) {
+      accent = (static_cast<uint16_t>(clockTwinkle(hash, state.elapsedMs)) * 160) / 255;
       hue = 34;
       accentSat = 45;   // warm ivory lightning flash
     }
   } else {
-    if ((hash & 0x1FF) == ((state.elapsedMs / 55) & 0x1FF)) {
-      accent = 44 + triWave6((state.elapsedMs / 22 + (hash >> 8)) & 63);
+    if ((hash & 7) == 0) {
+      accent = (static_cast<uint16_t>(clockTwinkle(hash, state.elapsedMs)) * 112) / 255;
       hue = 112 + (hash % 97);   // 112..208: teal -> violet
     }
   }
@@ -1192,7 +1189,7 @@ uint8_t clockRevealWeight(ClockAnimationKind kind, uint8_t x, uint8_t y, uint8_t
     return 0;
   }
   uint16_t delta = progress - order;
-  return delta > 42 ? 255 : static_cast<uint8_t>((delta * 255) / 42);
+  return delta > 42 ? 255 : smoothstep8(static_cast<uint8_t>((delta * 255) / 42));
 }
 
 uint16_t clockScaledHsv565(uint8_t hue, uint8_t saturation, uint8_t value, uint8_t scale) {
@@ -1200,13 +1197,12 @@ uint16_t clockScaledHsv565(uint8_t hue, uint8_t saturation, uint8_t value, uint8
 }
 
 uint16_t approachColor565(uint16_t current, uint16_t target, uint8_t step) {
-  uint8_t cr = ((current >> 11) & 0x1F) * 255 / 31;
-  uint8_t cg = ((current >> 5) & 0x3F) * 255 / 63;
-  uint8_t cb = (current & 0x1F) * 255 / 31;
-  uint8_t tr = ((target >> 11) & 0x1F) * 255 / 31;
-  uint8_t tg = ((target >> 5) & 0x3F) * 255 / 63;
-  uint8_t tb = (target & 0x1F) * 255 / 31;
-  return color565(approach(cr, tr, step), approach(cg, tg, step), approach(cb, tb, step));
+  uint8_t step5 = (static_cast<uint16_t>(step) * 31 + 254) / 255;
+  uint8_t step6 = (static_cast<uint16_t>(step) * 63 + 254) / 255;
+  uint8_t r = approach(current >> 11, target >> 11, step5);
+  uint8_t g = approach((current >> 5) & 63, (target >> 5) & 63, step6);
+  uint8_t b = approach(current & 31, target & 31, step5);
+  return (static_cast<uint16_t>(r) << 11) | (static_cast<uint16_t>(g) << 5) | b;
 }
 
 uint8_t clockColorStep(ClockAnimationKind kind) {
@@ -1228,30 +1224,21 @@ void clockClearDrawnPanel() {
   }
 }
 
-uint16_t clockTransitionMoverColor(uint16_t sourceIndex, uint8_t sourceX, uint8_t sourceY,
-                                   uint16_t targetIndex, uint8_t targetX, uint8_t targetY,
+uint16_t clockTransitionMoverColor(uint16_t sourceIndex, uint16_t targetIndex,
+                                   uint8_t targetX, uint8_t targetY,
                                    uint8_t progress, uint8_t overlapProgress,
                                    uint32_t nowMs) {
-  Hsv source = targetColorFor(sourceIndex, sourceX, sourceY, true);
-  uint8_t value = clockLerp8(source.v, nextType[targetIndex], progress);
+  uint16_t source = hsv565(visualHue[sourceIndex], visualSat[sourceIndex], visualValue[sourceIndex]);
+  uint8_t arrivalWeight = clockLerp8(kClockMinuteMoveArrivalScale, 255, overlapProgress);
+  uint16_t target;
   if (gClockAnimation.kind == kClockAnimationMinute) {
-    uint8_t scale = clockLerp8(255, kClockMinuteMoveArrivalScale, progress);
-    value = (static_cast<uint16_t>(value) * scale) / 255;
-    uint16_t moverColor = hsv565(clockMinutePaletteHue(targetX, targetY), 255, value);
-    if (overlapProgress == 0) {
-      return moverColor;
-    }
-    uint8_t arrivalWeight = clockLerp8(kClockMinuteMoveArrivalScale, 255, overlapProgress);
-    uint16_t targetColor = clockMinuteAnimatedColor(targetIndex, targetX, targetY, true,
-                                                    arrivalWeight,
-                                                    overlapProgress, nowMs);
-    return approachColor565(moverColor, targetColor, overlapProgress);
+    target = clockMinuteAnimatedColor(targetIndex, targetX, targetY, true,
+                                      arrivalWeight, overlapProgress, nowMs);
+  } else {
+    target = clockScaledHsv565(nextHue[targetIndex], nextSat[targetIndex],
+                               nextType[targetIndex], 255);
   }
-  // Hour movers wear the Aurora target hue immediately so the gather stays coherent
-  // instead of blending through the source cell color.
-  uint8_t hue = nextHue[targetIndex];
-  uint8_t saturation = clockLerp8(source.s, nextSat[targetIndex], progress);
-  return hsv565(hue, saturation, value);
+  return blendColor565(source, target, progress);
 }
 
 bool clockFindTransitionTarget(const RowBits *targetRows, uint16_t &position,
@@ -1346,7 +1333,7 @@ void renderClockTransitionFrame(uint32_t nowMs, const RowBits *sourceRows,
         uint8_t drawX = clockLerpWrappedCoordinate(x, targetX, panelWidth, progress);
         uint8_t drawY = clockLerpWrappedCoordinate(y, targetY, panelHeight, progress);
         uint16_t drawIndex = static_cast<uint16_t>(drawY) * kMaxWidth + drawX;
-        uint16_t color = clockTransitionMoverColor(sourceIndex, x, y, targetIndex,
+        uint16_t color = clockTransitionMoverColor(sourceIndex, targetIndex,
                                                    targetX, targetY, progress,
                                                    overlapProgress, nowMs);
 
@@ -1394,9 +1381,6 @@ void renderClockAnimationFrame(uint32_t nowMs) {
   // overlap window (see renderClockTransitionTargetOverlay / mover arrival), so
   // the post-move phase just holds the lit, lively clock -- no slow brighten.
   uint8_t colorStep = moveFadeIn ? kClockTransitionFadeColorStep : clockColorStep(gClockAnimation.kind);
-  // Once the gathered minute clock is on screen, render its colors directly. The
-  // small approachColor565 fade step can stall in RGB565 quantization buckets and
-  // freeze the colon/shimmer/sparkle, so snapping keeps them animating.
   bool minuteLive = moveSettled && gClockAnimation.kind == kClockAnimationMinute;
   ClockHourRenderState hourState = clockHourRenderStateFor(nowMs);
 
@@ -1465,16 +1449,14 @@ void commitClockFaceToLife() {
         cellHue[index] = nextHue[index];
         cellSat[index] = nextSat[index] < 150 ? 150 : nextSat[index];
         cellAge[index] = 8;
-        visualHue[index] = nextHue[index];
-        visualSat[index] = nextSat[index];
-        visualValue[index] = nextType[index];
         liveCells++;
       } else {
         cellAge[index] = 0;
-        visualHue[index] = 0;
-        visualSat[index] = 0;
-        visualValue[index] = 0;
       }
+      Hsv displayed = hsvFrom565(drawnColor[index]);
+      visualHue[index] = displayed.h;
+      visualSat[index] = displayed.s;
+      visualValue[index] = displayed.v;
       forceRedraw[index] = true;
     }
     currentRows[y] = cachedRow;

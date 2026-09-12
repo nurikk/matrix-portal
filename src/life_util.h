@@ -30,6 +30,16 @@ uint8_t triWave6(uint8_t value) {
   return value < 32 ? value : 63 - value;
 }
 
+uint8_t smoothstep8(uint8_t value) {
+  uint32_t t = value;
+  return (t * t * (765 - 2 * t) + 32512) / 65025;
+}
+
+uint8_t smoothWave8(uint8_t phase) {
+  uint8_t ramp = phase < 128 ? phase * 2 : (255 - phase) * 2;
+  return smoothstep8(ramp);
+}
+
 uint8_t addSaturated(uint8_t a, uint8_t b) {
   uint16_t sum = a + b;
   return sum > 255 ? 255 : sum;

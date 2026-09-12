@@ -3,7 +3,7 @@
 // Included once by main.cpp after life_color.h. Calls addProfile (life_profile.h).
 // Not a standalone TU.
 
-Hsv targetColorFor(uint16_t index, uint8_t x, uint8_t y, bool alive) {
+Hsv targetColorFor(uint16_t index, uint8_t x, uint8_t y, bool alive, uint32_t nowMs) {
   if (!alive) {
     return {visualHue[index], visualSat[index], 0};
   }
@@ -14,12 +14,11 @@ Hsv targetColorFor(uint16_t index, uint8_t x, uint8_t y, bool alive) {
   }
 #endif
 
-  uint8_t wave = triWave6(generation * 2 + x * 3 + y * 5 + cellType[index] * 11);
-  uint8_t shimmer = triWave6(generation + x * 4 + y * 2);
-  uint8_t hue = wrapHue(cellHue[index] +
-                        static_cast<int16_t>(shimmer / 2) - 8);
+  uint8_t wave = smoothWave8(nowMs / 32 + x * 2 + y * 3 + cellType[index] * 7);
+  uint8_t shimmer = smoothWave8(nowMs / 48 + x * 3 + y * 2);
+  uint8_t hue = wrapHue(cellHue[index] + static_cast<int16_t>(shimmer / 32) - 4);
   uint8_t saturation = cellSat[index];
-  uint8_t value = 150 + wave * 3;
+  uint8_t value = 184 + (static_cast<uint16_t>(wave) * 60) / 255;
 
   if (motionGlow) {
     value = addSaturated(value, motionGlow >> 1);
@@ -30,7 +29,7 @@ Hsv targetColorFor(uint16_t index, uint8_t x, uint8_t y, bool alive) {
     uint8_t warmth = (6 - cellAge[index]) * 36;
     hue = blendHue(hue, 34, warmth);
     saturation = static_cast<uint8_t>((static_cast<uint16_t>(saturation) * (255 - warmth) +
-                                       72U * warmth) / 255);
+                                       104U * warmth) / 255);
     value = addSaturated(value, (6 - cellAge[index]) * 24);
   } else if (cellAge[index] > 20) {
     uint8_t cooling = cellAge[index] - 20;
@@ -44,6 +43,7 @@ Hsv targetColorFor(uint16_t index, uint8_t x, uint8_t y, bool alive) {
 
 void renderFrame() {
   uint32_t renderStartedAt = micros();
+  uint32_t nowMs = millis();
   updatedPixels = 0;
 
   for (uint8_t y = 0; y < panelHeight; y++) {
@@ -60,7 +60,7 @@ void renderFrame() {
         continue;
       }
 
-      Hsv target = targetColorFor(index, x, y, alive);
+      Hsv target = targetColorFor(index, x, y, alive, nowMs);
       bool force = forceRedraw[index];
       forceRedraw[index] = false;
       uint8_t nextHueValue, nextSatValue, nextValue;
@@ -73,7 +73,7 @@ void renderFrame() {
         nextHueValue = approachHue(visualHue[index], target.h, gLive.hueStep);
         nextSatValue = approach(visualSat[index], target.s, gLive.satStep);
         uint8_t valueStep = alive ? gLive.liveValueStep : gLive.deathValueStep;
-        nextValue = approach(visualValue[index], target.v, valueStep);
+        nextValue = approachEased(visualValue[index], target.v, valueStep);
       }
 
       if (!force && nextHueValue == visualHue[index] && nextSatValue == visualSat[index] &&

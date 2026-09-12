@@ -122,12 +122,12 @@ static int checkLifeAuroraPalette() {
   visualSat[index] = 180;
 
   cellAge[index] = 10;
-  Hsv mature = targetColorFor(index, 0, 0, true);
+  Hsv mature = targetColorFor(index, 0, 0, true, 0);
   cellAge[index] = 0;
-  Hsv newborn = targetColorFor(index, 0, 0, true);
+  Hsv newborn = targetColorFor(index, 0, 0, true, 0);
   cellAge[index] = 80;
-  Hsv old = targetColorFor(index, 0, 0, true);
-  Hsv trail = targetColorFor(index, 0, 0, false);
+  Hsv old = targetColorFor(index, 0, 0, true, 0);
+  Hsv trail = targetColorFor(index, 0, 0, false, 0);
 
   if (newborn.h > 70 || newborn.s >= mature.s || newborn.v <= mature.v) {
     std::printf("FAIL: newborn target is not a warm ivory/gold flash\n");
@@ -141,6 +141,144 @@ static int checkLifeAuroraPalette() {
     std::printf("FAIL: dead-cell trail does not retain color while fading to black\n");
     return 1;
   }
+  return 0;
+}
+
+static int checkColorPipeline() {
+  for (uint8_t bits : {5, 6}) {
+    uint8_t shift = bits == 5 ? 11 : 5;
+    uint8_t maximum = (1 << bits) - 1;
+    for (uint8_t from = 0; from <= maximum; from++) {
+      for (uint8_t to = 0; to <= maximum; to++) {
+        uint16_t current = from << shift, target = to << shift;
+        if (approachColor565(current, target, 0) != current) return 1;
+        for (uint8_t frame = 0; frame < maximum; frame++) {
+          uint16_t next = approachColor565(current, target, 1);
+          if ((current < target && (next <= current || next > target)) ||
+              (current > target && (next >= current || next < target))) {
+            std::printf("FAIL: RGB565 fade stalled or overshot\n");
+            return 1;
+          }
+          current = next;
+        }
+        if (current != target) return 1;
+      }
+    }
+  }
+  for (uint16_t phase = 0; phase < 256; phase++) {
+    if (absDiff16(smoothWave8(phase), smoothWave8(phase + 1)) > 4) {
+      std::printf("FAIL: breathing wave has an abrupt edge\n");
+      return 1;
+    }
+  }
+  uint8_t fading = 255;
+  for (uint16_t frame = 0; frame < 100; frame++) {
+    uint8_t next = approachEased(fading, 0, 8);
+    if ((fading > 0 && next >= fading) || fading - next > 8) return 1;
+    fading = next;
+  }
+  if (fading != 0 || approachEased(4, 0, 8) != 3) return 1;
+
+  cellAge[0] = 10;
+  uint8_t dimmest = 255, brightest = 0;
+  for (uint32_t now = 0; now < 8192; now += 32) {
+    Hsv live = targetColorFor(0, 0, 0, true, now);
+    if (live.v < dimmest) dimmest = live.v;
+    if (live.v > brightest) brightest = live.v;
+    if (targetColorFor(0, 0, 0, false, now).v != 0) return 1;
+  }
+  if (dimmest < 180 || brightest > 248 || brightest - dimmest < 48) {
+    std::printf("FAIL: diffuser tuning lost live-cell contrast or breathing headroom\n");
+    return 1;
+  }
+
+  cellAge[0] = 10;
+  Hsv early = targetColorFor(0, 0, 0, true, 0);
+  generation += 100;
+  Hsv sameTime = targetColorFor(0, 0, 0, true, 0);
+  Hsv later = targetColorFor(0, 0, 0, true, 4096);
+  if (early.h != sameTime.h || early.v != sameTime.v || early.v == later.v) {
+    std::printf("FAIL: Life shimmer is not wall-time driven\n");
+    return 1;
+  }
+
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    for (uint8_t x = 0; x < panelWidth; x++) {
+      uint8_t hue = clockMinutePaletteHue(x, y);
+      if (hue < 112 || hue > 208 ||
+          (x && absDiff16(hue, clockMinutePaletteHue(x - 1, y)) > 2)) {
+        std::printf("FAIL: minute palette is not a continuous Aurora gradient\n");
+        return 1;
+      }
+      Hsv face;
+      uint8_t col, row;
+      if (clockDigitalPixel(12, 35, x, y, face) &&
+          clockDigitalGrid(x, y, col, row) && !clockDigitalColonCell(col, row)) {
+        if (face.h != hue || face.s < 240) return 1;
+        uint16_t index = static_cast<uint16_t>(y) * kMaxWidth + x;
+        nextHue[index] = face.h;
+        nextSat[index] = face.s;
+        nextType[index] = face.v;
+        for (uint32_t elapsed = 0; elapsed < 6144; elapsed += 192) {
+          uint32_t now = gClockAnimation.startedAt + elapsed;
+          uint16_t color = clockMinuteAnimatedColor(index, x, y, true, 255, 255, now);
+          if (bright8(color) < 224 ||
+              clockMinuteAnimatedColor(index, x, y, true, 0, 255, now) != 0) {
+            std::printf("FAIL: diffuser clock digits dimmed too far or leaked at zero reveal\n");
+            return 1;
+          }
+        }
+      }
+    }
+  }
+  uint8_t previous = 0;
+  uint16_t litFrames = 0;
+  for (uint32_t now = 0; now <= 8192; now += 16) {
+    uint8_t twinkle = clockTwinkle(0, now);
+    if (absDiff16(previous, twinkle) > 22) {
+      std::printf("FAIL: clock twinkle flashes instead of easing\n");
+      return 1;
+    }
+    if (twinkle) litFrames++;
+    previous = twinkle;
+  }
+  if (litFrames < 20 || litFrames > 40) return 1;
+  return 0;
+}
+
+static int checkRenderModes() {
+  gLive = defaultLifeSettings();
+  for (uint8_t y = 0; y < panelHeight; y++) currentRows[y] = RowBits(0, 0);
+  for (uint16_t i = 0; i < kTestCellCount; i++) {
+    visualValue[i] = 0;
+    drawnColor[i] = 0;
+    forceRedraw[i] = false;
+  }
+  matrix.pixels.fill(0);
+  currentRows[0] = bitForX[0];
+  visualHue[0] = cellHue[0] = 140;
+  visualSat[0] = cellSat[0] = 220;
+  visualValue[0] = 100;
+  cellAge[0] = 10;
+  forceRedraw[0] = true;
+  fillScreenActive = true;
+  gNowMs = 4096;
+  renderFrame();
+  if (drawnColor[0] != hsv565(140, 220, 100) || visualValue[0] != 100 || updatedPixels != 1) {
+    std::printf("FAIL: fill color changed during breathing\n");
+    return 1;
+  }
+  fillScreenActive = false;
+  gLive.noFade = 1;
+  renderFrame();
+  Hsv target = targetColorFor(0, 0, 0, true, gNowMs);
+  if (drawnColor[0] != hsv565(target.h, target.s, target.v)) return 1;
+  currentRows[0] = RowBits(0, 0);
+  renderFrame();
+  if (drawnColor[0] != 0 || visualValue[0] != 0) return 1;
+  renderFrame();
+  if (updatedPixels != 0) return 1;
+  gLive = defaultLifeSettings();
   return 0;
 }
 
@@ -206,7 +344,11 @@ static void seedOffPaletteLife() {
         drawnColor[index] = hsv565(cellHue[index], cellSat[index], visualValue[index]);
         matrix.drawPixel(x, y, drawnColor[index]);
       } else {
+        visualHue[index] = 0;
+        visualSat[index] = 0;
+        visualValue[index] = 0;
         drawnColor[index] = 0;
+        matrix.drawPixel(x, y, 0);
       }
     }
   }
@@ -265,6 +407,36 @@ static int checkEmptyTransition() {
   return 0;
 }
 
+static int checkPausedClockRestoration() {
+  seedOffPaletteLife();
+  std::array<Hsv, kTestCellCount> originalVisual = {};
+  std::array<RowBits, kTestHeight> originalRows = {};
+  for (uint16_t i = 0; i < kTestCellCount; i++) {
+    originalVisual[i] = {visualHue[i], visualSat[i], visualValue[i]};
+  }
+  for (uint8_t y = 0; y < panelHeight; y++) originalRows[y] = currentRows[y];
+  gPaused = true;
+  gClockAnimation = {};
+  if (!beginClockAnimation(kClockAnimationMinute, 12, 35, 1234, 0, kClockMinuteAnimationMs)) return 1;
+  renderClockAnimationFrame(kClockMinuteAnimationMs);
+  if (finishClockAnimationAfterRender(kClockMinuteAnimationMs)) return 1;
+  uint32_t releaseAt = kClockMinuteAnimationMs + kClockPostAnimationHoldMs;
+  renderClockAnimationFrame(releaseAt);
+  if (!finishClockAnimationAfterRender(releaseAt) || clockAnimationActive()) return 1;
+  for (uint16_t i = 0; i < kTestCellCount; i++) {
+    if (visualHue[i] != originalVisual[i].h || visualSat[i] != originalVisual[i].s ||
+        visualValue[i] != originalVisual[i].v || !forceRedraw[i]) {
+      std::printf("FAIL: paused clock overwrote Life visual state\n");
+      return 1;
+    }
+  }
+  for (uint8_t y = 0; y < panelHeight; y++) {
+    if (currentRows[y].low != originalRows[y].low || currentRows[y].high != originalRows[y].high) return 1;
+  }
+  gPaused = false;
+  return 0;
+}
+
 // Tolerance: once the pixels have gathered, the clock face must be essentially
 // fully lit within this window. Larger gaps are the "pixels landed but the clock
 // hasn't started yet" pause we are guarding against.
@@ -280,8 +452,11 @@ struct FrameSample {
 static int traceMinuteAnimation() {
   configureHarnessBounds();
   if (checkLifeAuroraPalette() != 0) return 1;
+  if (checkColorPipeline() != 0) return 1;
+  if (checkRenderModes() != 0) return 1;
   if (checkTransitionGeometry() != 0) return 1;
   if (checkEmptyTransition() != 0) return 1;
+  if (checkPausedClockRestoration() != 0) return 1;
   seedOffPaletteLife();
   generation = 42;
   motionGlow = 0;
@@ -289,6 +464,13 @@ static int traceMinuteAnimation() {
   if (!beginClockAnimation(kClockAnimationMinute, 12, 35, 0x12345678UL, 0,
                            kClockMinuteAnimationMs)) {
     std::printf("FAIL: beginClockAnimation rejected minute animation\n");
+    return 1;
+  }
+
+  std::array<uint16_t, kTestCellCount> sourceFrame = matrix.pixels;
+  renderClockAnimationFrame(0);
+  if (matrix.pixels != sourceFrame) {
+    std::printf("FAIL: clock gathering jumps away from displayed source colors\n");
     return 1;
   }
 
@@ -450,10 +632,29 @@ static int traceMinuteAnimation() {
   std::array<uint16_t, kTestCellCount> displayed = matrix.pixels;
   commitClockFaceToLife();
   for (uint16_t index = 0; index < displayed.size(); index++) {
+    uint16_t visual = hsv565(visualHue[index], visualSat[index], visualValue[index]);
+    if (absDiff16(red8(visual), red8(displayed[index])) > 9 ||
+        absDiff16(green8(visual), green8(displayed[index])) > 9 ||
+        absDiff16(blue8(visual), blue8(displayed[index])) > 9) {
+      std::printf("FAIL: clock release lost displayed color at %u (0x%04x -> 0x%04x)\n",
+                  index, displayed[index], visual);
+      return 1;
+    }
     if (drawnColor[index] != displayed[index]) {
       std::printf("FAIL: clock release changed framebuffer cache at index %u "
                   "(displayed=0x%04x cached=0x%04x)\n",
                   index, displayed[index], drawnColor[index]);
+      return 1;
+    }
+  }
+
+  std::array<uint8_t, kTestCellCount> releasedValues = {};
+  for (uint16_t index = 0; index < kTestCellCount; index++) releasedValues[index] = visualValue[index];
+  renderFrame();
+  for (uint16_t index = 0; index < kTestCellCount; index++) {
+    if (absDiff16(visualValue[index], releasedValues[index]) > gLive.liveValueStep ||
+        drawnColor[index] != matrix.pixels[index]) {
+      std::printf("FAIL: first Life frame after clock release jumped or lost cache consistency\n");
       return 1;
     }
   }

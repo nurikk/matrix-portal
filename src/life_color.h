@@ -40,6 +40,11 @@ uint8_t approach(uint8_t current, uint8_t target, uint8_t step) {
   return current;
 }
 
+uint8_t approachEased(uint8_t current, uint8_t target, uint8_t step) {
+  uint8_t easedStep = (absDiff16(current, target) + 3) / 4;
+  return approach(current, target, easedStep < step ? easedStep : step);
+}
+
 uint8_t clampAuroraHue(int16_t hue) {
   if (hue < kAuroraHueMin) return kAuroraHueMin;
   if (hue > kAuroraHueMax) return kAuroraHueMax;
@@ -94,6 +99,34 @@ uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
   return (static_cast<uint16_t>(r & 0xF8) << 8) |
          (static_cast<uint16_t>(g & 0xFC) << 3) |
          (b >> 3);
+}
+
+Hsv hsvFrom565(uint16_t color) {
+  uint8_t r = ((color >> 11) & 31) * 255 / 31;
+  uint8_t g = ((color >> 5) & 63) * 255 / 63;
+  uint8_t b = (color & 31) * 255 / 31;
+  uint8_t value = r > g ? r : g;
+  if (b > value) value = b;
+  uint8_t minimum = r < g ? r : g;
+  if (b < minimum) minimum = b;
+  uint8_t chroma = value - minimum;
+  if (chroma == 0) return {0, 0, value};
+  int16_t hue;
+  if (value == r) {
+    hue = ((static_cast<int16_t>(g) - b) * 256) / (6 * chroma);
+  } else if (value == g) {
+    hue = 85 + ((static_cast<int16_t>(b) - r) * 256) / (6 * chroma);
+  } else {
+    hue = 171 + ((static_cast<int16_t>(r) - g) * 256) / (6 * chroma);
+  }
+  return {wrapHue(hue), static_cast<uint8_t>((chroma * 255U) / value), value};
+}
+
+uint16_t blendColor565(uint16_t from, uint16_t to, uint8_t amount) {
+  uint8_t r = (((from >> 11) * (255 - amount)) + ((to >> 11) * amount) + 127) / 255;
+  uint8_t g = ((((from >> 5) & 63) * (255 - amount)) + (((to >> 5) & 63) * amount) + 127) / 255;
+  uint8_t b = (((from & 31) * (255 - amount)) + ((to & 31) * amount) + 127) / 255;
+  return (static_cast<uint16_t>(r) << 11) | (static_cast<uint16_t>(g) << 5) | b;
 }
 
 uint16_t hsv565(uint8_t hue, uint8_t saturation, uint8_t value) {
