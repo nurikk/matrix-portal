@@ -23,6 +23,7 @@ struct ClockAnimationState {
 
 #if WIFI_PORTAL_ENABLED
 #include <time.h>
+#include "retro_scene.h"
 
 constexpr uint16_t kClockHourAnimationMs = 12000;
 constexpr uint16_t kClockTransitionMoveMs = 3800;
@@ -35,7 +36,13 @@ constexpr uint16_t kClockPostAnimationHoldMs = 5000;
 constexpr uint8_t kClockMinuteScheduleInterval = 5;
 constexpr time_t kClockValidEpoch = 1609459200;   // before 2021 means SNTP has not synced yet
 
+enum class ClockSequencePhase : uint8_t { Clock, SceneEntry, Scene };
 ClockAnimationState gClockAnimation = {};
+ClockSequencePhase gClockSequencePhase = ClockSequencePhase::Clock;
+RetroScene gClockScene = RetroScene::Count;
+RetroCanvas gClockSceneCanvas;
+RowBits gClockSceneSourceRows[kMaxHeight];
+bool gClockSceneSource = false;
 uint16_t gClockMoveSourceCount = 0;
 uint16_t gClockMoveTargetCount = 0;
 WeatherSnapshot gClockWeather = {};
@@ -66,6 +73,7 @@ bool clockFacePixel(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
                     uint8_t x, uint8_t y, Hsv &hsv);
 void precomputeClockFace();
 void prepareClockTransition();
+void precomputeSceneTarget();
 int16_t clockPointX(int16_t cx, uint8_t radius, uint8_t tick);
 int16_t clockPointY(int16_t cy, uint8_t radius, uint8_t tick);
 
@@ -88,17 +96,6 @@ uint8_t clockLerp8(uint8_t from, uint8_t to, uint8_t amount) {
 
 uint8_t clockAbsDiff8(uint8_t a, uint8_t b) {
   return a > b ? a - b : b - a;
-}
-
-uint8_t clockDurationMsFor(ClockAnimationKind kind) {
-  switch (kind) {
-  case kClockAnimationHour:
-    return kClockHourAnimationMs / 1000;
-  case kClockAnimationMinute:
-    return kClockMinuteAnimationMs / 1000;
-  default:
-    return 0;
-  }
 }
 
 uint16_t clockDurationMillisFor(ClockAnimationKind kind) {
@@ -143,6 +140,8 @@ bool beginClockAnimation(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
     return false;
   }
 
+  gClockSequencePhase = ClockSequencePhase::Clock;
+  gClockSceneSource = false;
   gClockAnimation.kind = kind;
   gClockAnimation.hour = hour;
   gClockAnimation.minute = minute;
@@ -159,6 +158,29 @@ bool beginClockAnimation(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
     gClockWeatherValid = false;
   }
   precomputeClockFace();
+  prepareClockTransition();
+  return true;
+}
+
+uint16_t clockSequenceDurationMillisFor(ClockAnimationKind kind) {
+  uint16_t clockMs = clockDurationMillisFor(kind);
+  return clockMs ? kClockTransitionMoveMs + kRetroSceneDurationMs + clockMs : 0;
+}
+
+bool beginRetroClockAnimation(ClockAnimationKind kind, uint8_t hour, uint8_t minute,
+                              uint32_t eventMinuteId, uint32_t nowMs, bool fastReveal = false) {
+  if (!beginClockAnimation(kind, hour, minute, eventMinuteId, nowMs,
+                           nowMs + clockSequenceDurationMillisFor(kind), fastReveal)) {
+    return false;
+  }
+  gClockSequencePhase = ClockSequencePhase::SceneEntry;
+  uint8_t sceneCount = static_cast<uint8_t>(RetroScene::Count);
+  uint8_t previousScene = static_cast<uint8_t>(gClockScene);
+  uint8_t scene = random32() % (sceneCount - (previousScene < sceneCount));
+  if (scene >= previousScene) ++scene;
+  gClockScene = static_cast<RetroScene>(scene);
+  renderRetroScene(gClockSceneCanvas, gClockScene, 0);
+  precomputeSceneTarget();
   prepareClockTransition();
   return true;
 }
@@ -196,9 +218,8 @@ bool startClockAnimationRequest(uint8_t request, uint32_t nowMs) {
     minute = uptimeMinute % 60;
   }
 
-  return beginClockAnimation(kind, hour, minute, eventMinuteId, nowMs,
-                             nowMs + clockDurationMillisFor(kind),
-                             request == kClockAnimationRequestKnockHour);
+  return beginRetroClockAnimation(kind, hour, minute, eventMinuteId, nowMs,
+                                  request == kClockAnimationRequestKnockHour);
 }
 
 void clockUpdateSecondAnchor(time_t epoch, uint32_t nowMs) {
@@ -239,9 +260,8 @@ bool updateClockAnimation(uint32_t nowMs) {
   struct tm eventLocal;
   localtime_r(&eventEpoch, &eventLocal);
   ClockAnimationKind kind = clockKindForEvent(eventLocal);
-  uint16_t durationMs = clockDurationMillisFor(kind);
-  uint8_t durationSeconds = clockDurationMsFor(kind);
-  if (durationMs == 0 || durationSeconds == 0) {
+  uint16_t durationMs = clockSequenceDurationMillisFor(kind);
+  if (durationMs == 0) {
     return false;
   }
 
@@ -258,9 +278,8 @@ bool updateClockAnimation(uint32_t nowMs) {
     return false;
   }
 
-  if (!beginClockAnimation(kind, static_cast<uint8_t>(eventLocal.tm_hour),
-                           static_cast<uint8_t>(eventLocal.tm_min), eventMinuteId,
-                           nowMs - (durationMs - msUntilEvent), nowMs + msUntilEvent)) {
+  if (!beginRetroClockAnimation(kind, static_cast<uint8_t>(eventLocal.tm_hour),
+                                static_cast<uint8_t>(eventLocal.tm_min), eventMinuteId, nowMs)) {
     return false;
   }
   gClockLastScheduledMinuteId = eventMinuteId;
@@ -272,7 +291,8 @@ bool clockAnimationActive() {
 }
 
 bool clockAnimationFinalFrameDue(uint32_t nowMs) {
-  return gClockAnimation.active && !gClockAnimation.finalRendered &&
+  return gClockAnimation.active && gClockSequencePhase == ClockSequencePhase::Clock &&
+         !gClockAnimation.finalRendered &&
          static_cast<int32_t>(nowMs - gClockAnimation.endsAt) >= 0;
 }
 
@@ -1097,7 +1117,7 @@ uint16_t clockHourAnimatedColor(uint16_t index, uint8_t x, uint8_t y,
   uint16_t hash = clockPixelHash(x, y, gClockAnimation.eventMinuteId ^ 0xA5A5A5A5UL);
   if (clockWeatherRainCode(code)) {
     uint8_t phase = (state.elapsedMs / 42 + (hash & 31)) & 31;
-    if (((x + phase) & 15) == 0 && y > panelHeight / 3) {
+    if (((x + phase) & 15) == 0) {
       accent = 100 + triWave6((y + phase) & 63);
       hue = 132;
     }
@@ -1228,10 +1248,15 @@ uint16_t clockTransitionMoverColor(uint16_t sourceIndex, uint16_t targetIndex,
                                    uint8_t targetX, uint8_t targetY,
                                    uint8_t progress, uint8_t overlapProgress,
                                    uint32_t nowMs) {
-  uint16_t source = hsv565(visualHue[sourceIndex], visualSat[sourceIndex], visualValue[sourceIndex]);
+  uint16_t source = gClockSceneSource
+      ? gClockSceneCanvas.panelPixel(sourceIndex % kMaxWidth, sourceIndex / kMaxWidth,
+                                      panelWidth, panelHeight)
+      : hsv565(visualHue[sourceIndex], visualSat[sourceIndex], visualValue[sourceIndex]);
   uint8_t arrivalWeight = clockLerp8(kClockMinuteMoveArrivalScale, 255, overlapProgress);
   uint16_t target;
-  if (gClockAnimation.kind == kClockAnimationMinute) {
+  if (gClockSequencePhase == ClockSequencePhase::SceneEntry) {
+    target = gClockSceneCanvas.panelPixel(targetX, targetY, panelWidth, panelHeight);
+  } else if (gClockAnimation.kind == kClockAnimationMinute) {
     target = clockMinuteAnimatedColor(targetIndex, targetX, targetY, true,
                                       arrivalWeight, overlapProgress, nowMs);
   } else {
@@ -1276,7 +1301,10 @@ void renderClockTransitionTargetOverlay(uint32_t nowMs, const RowBits *targetRow
 
       uint16_t index = baseIndex + x;
       uint16_t color = 0;
-      if (gClockAnimation.kind == kClockAnimationMinute) {
+      if (gClockSequencePhase == ClockSequencePhase::SceneEntry) {
+        color = blendColor565(0, gClockSceneCanvas.panelPixel(x, y, panelWidth, panelHeight),
+                              overlapProgress);
+      } else if (gClockAnimation.kind == kClockAnimationMinute) {
         color = clockMinuteAnimatedColor(index, x, y, true, targetWeight,
                                          overlapProgress, nowMs);
       } else if (gClockAnimation.kind == kClockAnimationHour) {
@@ -1359,9 +1387,90 @@ void renderClockTransitionFrame(uint32_t nowMs, const RowBits *sourceRows,
   framesThisPeriod++;
 }
 
+void precomputeSceneTarget() {
+  for (uint8_t y = 0; y < panelHeight; ++y) {
+    nextRows[y] = 0;
+    for (uint8_t x = 0; x < panelWidth; ++x) {
+      uint16_t color = gClockSceneCanvas.panelPixel(x, y, panelWidth, panelHeight);
+      if (color) nextRows[y] |= bitForX[x];
+    }
+  }
+}
+
+void renderClockSceneFrame(uint32_t elapsedMs) {
+  uint32_t renderStartedAt = micros();
+  renderRetroScene(gClockSceneCanvas, gClockScene, elapsedMs);
+  updatedPixels = 0;
+  for (uint8_t y = 0; y < panelHeight; ++y) {
+    for (uint8_t x = 0; x < panelWidth; ++x) {
+      uint16_t index = y * kMaxWidth + x;
+      uint16_t color = gClockSceneCanvas.panelPixel(x, y, panelWidth, panelHeight);
+      if (color != drawnColor[index]) {
+        drawnColor[index] = color;
+        matrix.drawPixel(x, y, color);
+        ++updatedPixels;
+      }
+    }
+  }
+  uint32_t showStartedAt = micros();
+  matrix.show();
+  addProfile(profileRenderMicros, profileRenderMaxMicros, showStartedAt - renderStartedAt);
+  addProfile(profileShowMicros, profileShowMaxMicros, micros() - showStartedAt);
+  ++profileRenderSamples;
+  ++framesThisPeriod;
+}
+
+void prepareClockAfterScene(uint32_t nowMs) {
+  gClockSceneSource = true;
+  for (uint8_t y = 0; y < panelHeight; ++y) {
+    gClockSceneSourceRows[y] = 0;
+    for (uint8_t x = 0; x < panelWidth; ++x) {
+      if (drawnColor[y * kMaxWidth + x]) gClockSceneSourceRows[y] |= bitForX[x];
+    }
+  }
+  gClockSequencePhase = ClockSequencePhase::Clock;
+  gClockAnimation.startedAt = nowMs;
+  gClockAnimation.endsAt = nowMs + gClockAnimation.durationMs;
+  struct tm local;
+  time_t epoch;
+  if (clockReadLocal(local, epoch)) {
+    time_t displayEpoch = epoch + gClockAnimation.durationMs / 1000;
+    localtime_r(&displayEpoch, &local);
+    gClockAnimation.hour = static_cast<uint8_t>(local.tm_hour);
+    gClockAnimation.minute = static_cast<uint8_t>(local.tm_min);
+  } else {
+    uint16_t uptimeMinute = (gClockAnimation.endsAt / 60000UL) % (24 * 60);
+    gClockAnimation.hour = uptimeMinute / 60;
+    gClockAnimation.minute = uptimeMinute % 60;
+  }
+  if (gClockAnimation.kind == kClockAnimationHour) {
+    gClockWeatherValid = weatherCopySnapshot(gClockWeather);
+  }
+  precomputeClockFace();
+  gClockMoveSourceCount = clockCountLiveCells(gClockSceneSourceRows);
+  gClockMoveTargetCount = clockCountLiveCells(nextRows);
+}
+
 void renderClockAnimationFrame(uint32_t nowMs) {
+  if (gClockSequencePhase == ClockSequencePhase::SceneEntry) {
+    if (nowMs - gClockAnimation.startedAt < kClockTransitionMoveMs) {
+      renderClockTransitionFrame(nowMs, currentRows, nextRows, kClockTransitionMoveMs);
+      return;
+    }
+    gClockSequencePhase = ClockSequencePhase::Scene;
+    gClockAnimation.startedAt = nowMs;
+  }
+  if (gClockSequencePhase == ClockSequencePhase::Scene) {
+    uint32_t elapsedMs = nowMs - gClockAnimation.startedAt;
+    if (elapsedMs < kRetroSceneDurationMs) {
+      renderClockSceneFrame(elapsedMs);
+      return;
+    }
+    prepareClockAfterScene(nowMs);
+  }
   if (clockTransitionActive(nowMs)) {
-    renderClockTransitionFrame(nowMs, currentRows, nextRows, clockTransitionMoveDurationMs());
+    renderClockTransitionFrame(nowMs, gClockSceneSource ? gClockSceneSourceRows : currentRows,
+                                nextRows, clockTransitionMoveDurationMs());
     return;
   }
 

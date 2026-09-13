@@ -26,3 +26,14 @@ run_clock_trace -DMATRIX_WIDTH=128 -DMATRIX_TILE=2
 OUT_HOUR="$(mktemp -t test_hour.XXXXXX)"
 "$CXX" -std=c++17 -O2 -Wall -Wextra "$DIR/test_clock_hour_aurora.cpp" -o "$OUT_HOUR"
 "$OUT_HOUR"
+
+run_retro_scene() {
+  OUT_RETRO="$(mktemp -t test_retro.XXXXXX)"
+  "$CXX" -std=c++17 -O2 -Wall -Wextra "$@" "$DIR/test_clock_retro_scene.cpp" -o "$OUT_RETRO"
+  "$OUT_RETRO"
+}
+
+run_retro_scene
+run_retro_scene -DMATRIX_WIDTH=32
+run_retro_scene -DMATRIX_WIDTH=128 -DMATRIX_TILE=1
+run_retro_scene -DMATRIX_WIDTH=128 -DMATRIX_TILE=-2

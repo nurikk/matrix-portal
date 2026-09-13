@@ -154,12 +154,16 @@ static int runScenario(const Scenario &s) {
       if (nextRows[y] & bitForX[x]) { isTarget[y * MATRIX_WIDTH + x] = true; targetCount++; }
 
   uint32_t lateBrightSum = 0, lateSamples = 0, lateCoolSamples = 0, lateWarmSamples = 0;
+  std::array<uint32_t, 3> lateBackgroundSamples = {};
   for (uint32_t now = 0; now <= kClockHourAnimationMs; now += 33) {
     gNowMs = now; gNowMicros = now * 1000;
     renderClockAnimationFrame(now);
     for (uint8_t y = 0; y < panelHeight; y++) {
       for (uint8_t x = 0; x < panelWidth; x++) {
         uint16_t c = matrix.pixels[y * MATRIX_WIDTH + x];
+        if (now >= 9000 && !isTarget[y * MATRIX_WIDTH + x] && c != 0) {
+          ++lateBackgroundSamples[y * lateBackgroundSamples.size() / panelHeight];
+        }
         if (now >= 9000 && isTarget[y * MATRIX_WIDTH + x]) {
           uint8_t r = red8(c), g = green8(c), b = blue8(c);
           uint8_t m = r > g ? r : g; m = m > b ? m : b;
@@ -189,6 +193,12 @@ static int runScenario(const Scenario &s) {
   if (s.valid && lateWarmSamples == 0) {
     std::printf("FAIL[%s]: rendered weather face contains no warm Aurora accent\n", s.name);
     return 1;
+  }
+  for (unsigned band = 0; band < lateBackgroundSamples.size(); ++band) {
+    if (lateBackgroundSamples[band] == 0) {
+      std::printf("FAIL[%s]: no background sparkles in vertical third %u\n", s.name, band);
+      return 1;
+    }
   }
   return 0;
 }
