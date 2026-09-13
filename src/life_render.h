@@ -89,7 +89,7 @@ void renderFrame() {
 
       if (force || color != drawnColor[index]) {
         drawnColor[index] = color;
-        matrix.drawPixel(x, y, color);
+        matrix.drawPixel(x, y, calibrateColor565(color));
         updatedPixels++;
       }
     }

@@ -1313,7 +1313,7 @@ void renderClockTransitionTargetOverlay(uint32_t nowMs, const RowBits *targetRow
       }
       if (color != drawnColor[index]) {
         drawnColor[index] = color;
-        matrix.drawPixel(x, y, color);
+        matrix.drawPixel(x, y, calibrateColor565(color));
         updatedPixels++;
       }
     }
@@ -1367,7 +1367,7 @@ void renderClockTransitionFrame(uint32_t nowMs, const RowBits *sourceRows,
 
         if (color != drawnColor[drawIndex]) {
           drawnColor[drawIndex] = color;
-          matrix.drawPixel(drawX, drawY, color);
+          matrix.drawPixel(drawX, drawY, calibrateColor565(color));
           updatedPixels++;
         }
       }
@@ -1407,7 +1407,7 @@ void renderClockSceneFrame(uint32_t elapsedMs) {
       uint16_t color = gClockSceneCanvas.panelPixel(x, y, panelWidth, panelHeight);
       if (color != drawnColor[index]) {
         drawnColor[index] = color;
-        matrix.drawPixel(x, y, color);
+        matrix.drawPixel(x, y, calibrateColor565(color));
         ++updatedPixels;
       }
     }
@@ -1518,7 +1518,7 @@ void renderClockAnimationFrame(uint32_t nowMs) {
 
       if (color != drawnColor[index]) {
         drawnColor[index] = color;
-        matrix.drawPixel(x, y, color);
+        matrix.drawPixel(x, y, calibrateColor565(color));
         updatedPixels++;
       }
     }

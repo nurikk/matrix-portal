@@ -165,6 +165,12 @@ static int checkColorPipeline() {
       }
     }
   }
+  if (calibrateColor565(0) != 0 || calibrateColor565(0xFFFF) != 0xCFF7 ||
+      calibrateColor565(0x07E0) != 0x07E0) {
+    std::printf("FAIL: RGB565 panel calibration gains changed\n");
+    return 1;
+  }
+
   for (uint16_t phase = 0; phase < 256; phase++) {
     if (absDiff16(smoothWave8(phase), smoothWave8(phase + 1)) > 4) {
       std::printf("FAIL: breathing wave has an abrupt edge\n");
@@ -342,7 +348,7 @@ static void seedOffPaletteLife() {
         visualSat[index] = cellSat[index];
         visualValue[index] = 220;
         drawnColor[index] = hsv565(cellHue[index], cellSat[index], visualValue[index]);
-        matrix.drawPixel(x, y, drawnColor[index]);
+        matrix.drawPixel(x, y, calibrateColor565(drawnColor[index]));
       } else {
         visualHue[index] = 0;
         visualSat[index] = 0;
@@ -632,7 +638,8 @@ static int traceMinuteAnimation() {
   std::array<uint16_t, kTestCellCount> displayed = matrix.pixels;
   commitClockFaceToLife();
   for (uint16_t index = 0; index < displayed.size(); index++) {
-    uint16_t visual = hsv565(visualHue[index], visualSat[index], visualValue[index]);
+    uint16_t visual = calibrateColor565(
+        hsv565(visualHue[index], visualSat[index], visualValue[index]));
     if (absDiff16(red8(visual), red8(displayed[index])) > 9 ||
         absDiff16(green8(visual), green8(displayed[index])) > 9 ||
         absDiff16(blue8(visual), blue8(displayed[index])) > 9) {
@@ -640,7 +647,7 @@ static int traceMinuteAnimation() {
                   index, displayed[index], visual);
       return 1;
     }
-    if (drawnColor[index] != displayed[index]) {
+    if (calibrateColor565(drawnColor[index]) != displayed[index]) {
       std::printf("FAIL: clock release changed framebuffer cache at index %u "
                   "(displayed=0x%04x cached=0x%04x)\n",
                   index, displayed[index], drawnColor[index]);
@@ -653,7 +660,7 @@ static int traceMinuteAnimation() {
   renderFrame();
   for (uint16_t index = 0; index < kTestCellCount; index++) {
     if (absDiff16(visualValue[index], releasedValues[index]) > gLive.liveValueStep ||
-        drawnColor[index] != matrix.pixels[index]) {
+        calibrateColor565(drawnColor[index]) != matrix.pixels[index]) {
       std::printf("FAIL: first Life frame after clock release jumped or lost cache consistency\n");
       return 1;
     }

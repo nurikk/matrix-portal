@@ -77,7 +77,7 @@ static void resetHarness(bool empty = false) {
       cellType[i] = 2;
       cellAge[i] = 9;
       drawnColor[i] = hsv565(visualHue[i], visualSat[i], visualValue[i]);
-      matrix.drawPixel(x, y, drawnColor[i]);
+      matrix.drawPixel(x, y, calibrateColor565(drawnColor[i]));
     }
   }
 }
@@ -144,7 +144,7 @@ static void checkPanelMatchesScene() {
     for (uint8_t x = 0; x < panelWidth; ++x) {
       uint16_t expected = gClockSceneCanvas.panelPixel(x, y, panelWidth, panelHeight);
       assert(drawnColor[y * kMaxWidth + x] == expected);
-      assert(matrix.pixels[y * panelWidth + x] == expected);
+      assert(matrix.pixels[y * panelWidth + x] == calibrateColor565(expected));
     }
   }
 }

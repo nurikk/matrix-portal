@@ -120,7 +120,7 @@ void fillBoard(bool randomColors) {
       visualValue[index] = value;
       drawnColor[index] = color;
       forceRedraw[index] = false;
-      matrix.drawPixel(x, y, color);
+      matrix.drawPixel(x, y, calibrateColor565(color));
     }
   }
 

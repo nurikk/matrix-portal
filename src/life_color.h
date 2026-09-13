@@ -101,6 +101,16 @@ uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
          (b >> 3);
 }
 
+constexpr uint16_t kRedCalibrationGainQ8 = 205;
+constexpr uint16_t kBlueCalibrationGainQ8 = 190;
+
+uint16_t calibrateColor565(uint16_t color) {
+  uint16_t red = ((color >> 11) * kRedCalibrationGainQ8 + 128) >> 8;
+  uint16_t green = (color >> 5) & 0x3F;
+  uint16_t blue = ((color & 0x1F) * kBlueCalibrationGainQ8 + 128) >> 8;
+  return (red << 11) | (green << 5) | blue;
+}
+
 Hsv hsvFrom565(uint16_t color) {
   uint8_t r = ((color >> 11) & 31) * 255 / 31;
   uint8_t g = ((color >> 5) & 63) * 255 / 63;
