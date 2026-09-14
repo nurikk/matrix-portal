@@ -135,10 +135,9 @@ void setup() {
 #if WIFI_PORTAL_ENABLED
   renderBootStatus("Starting WiFi");
   webPortalWaitForInitialSync(renderBootStatus);
-#else
+#endif
   matrix.fillScreen(0);
   matrix.show();
-#endif
   seedLife();
   renderFrame();
   resetProfileCounters();

@@ -87,26 +87,79 @@ static uint32_t frameHash(const RetroCanvas &canvas) {
   for (uint16_t color : canvas.pixels) hash = (hash ^ color) * 16777619UL;
   return hash;
 }
-static unsigned countColor(const RetroCanvas &canvas, uint8_t color) {
+static unsigned countColor(const RetroCanvas &canvas, uint16_t color) {
   unsigned count = 0;
-  for (uint16_t pixel : canvas.pixels) count += pixel == kRetroPalette[color];
+  for (uint16_t pixel : canvas.pixels) count += pixel == color;
   return count;
 }
-static void checkSprites() {
+
+template <std::size_t H, std::size_t W, std::size_t N>
+static uint32_t spriteHash(const char (&sprite)[H][W], const uint16_t (&palette)[N]) {
   RetroCanvas canvas;
-  std::array<uint32_t, 5> firstHashes = {};
-  for (uint8_t scene = 0; scene < 5; ++scene) {
+  canvas.clear(0xF81F);
+  canvas.sprite(0, 0, sprite, palette);
+  return frameHash(canvas);
+}
+
+template <std::size_t F, std::size_t H, std::size_t W, std::size_t N>
+static void checkFrameHashes(const char (&sprites)[F][H][W], const uint16_t (&palette)[N],
+                             const std::array<uint32_t, F> &expected) {
+  for (unsigned frame = 0; frame < F; ++frame)
+    assert(spriteHash(sprites[frame], palette) == expected[frame]);
+}
+
+static void checkOriginalSprites() {
+  checkFrameHashes(kMarioPose, kMarioPalette,
+                   std::array<uint32_t, 2>{0x9A81D5CA, 0x8ADDA06E});
+  checkFrameHashes(kMarioWalk, kMarioWalkPalette,
+                   std::array<uint32_t, 3>{0x175C6688, 0xDCBB2609, 0xEA0CE08F});
+  checkFrameHashes(kMarioBlock, kMarioBlockPalette,
+                   std::array<uint32_t, 4>{0x81B9114E, 0xD65BB60A, 0xAE7272CA, 0xC902D693});
+  for (const auto &frame : kMarioBlock) {
+    RetroCanvas block;
+    block.sprite(0, 0, frame, kMarioBlockPalette);
+    assert(countColor(block, 0x421F) == 0 && countColor(block, 0x0151) == 0);
+  }
+  checkFrameHashes(kMarioCoin, kMarioCoinPalette,
+                   std::array<uint32_t, 3>{0x6C5F869D, 0xC722B1FD, 0x3B629BFD});
+  for (const auto &frame : kMarioCoin) {
+    RetroCanvas coin;
+    coin.sprite(0, 0, frame, kMarioCoinPalette);
+    assert(countColor(coin, 0x421F) == 0 && countColor(coin, 0x0151) == 0);
+  }
+  checkFrameHashes(kPacManLeft, kPacManPalette,
+                   std::array<uint32_t, 3>{0xE0B441D1, 0x8639CB45, 0xE10C5F26});
+  checkFrameHashes(kGhostLeft, kGhostPalette,
+                   std::array<uint32_t, 2>{0x825BCD77, 0x61810DDD});
+  checkFrameHashes(kFrightenedGhost, kFrightenedPalette,
+                   std::array<uint32_t, 2>{0x88C4146D, 0x75FD366D});
+  checkFrameHashes(kKirbyWalk, kKirbyPalette,
+                   std::array<uint32_t, 3>{0xDC59BA65, 0x4B4DC019, 0x4229AD35});
+  checkFrameHashes(kKirbyStar, kKirbyStarPalette, std::array<uint32_t, 1>{0x762C162E});
+  checkFrameHashes(kMegaManTeleport, kMegaManTeleportPalette,
+                   std::array<uint32_t, 3>{0x5775CF8D, 0xBC29D125, 0x62CBC265});
+  checkFrameHashes(kMegaManWalk, kMegaManPalette,
+                   std::array<uint32_t, 3>{0x599158D9, 0x781810D1, 0xC50AC9E6});
+  checkFrameHashes(kMegaManShoot, kMegaManShootPalette,
+                   std::array<uint32_t, 3>{0x6B1D241A, 0x1D1BEA83, 0x4F96D63D});
+  checkFrameHashes(kDuckFly, kDuckPalette,
+                   std::array<uint32_t, 3>{0xB3985332, 0xFF23B83D, 0x5497422A});
+  checkFrameHashes(kDogLaugh, kDogPalette,
+                   std::array<uint32_t, 2>{0x02215C1D, 0x5B21C9D2});
+}
+
+static void checkSprites() {
+  checkOriginalSprites();
+  RetroCanvas canvas;
+  constexpr uint8_t sceneCount = static_cast<uint8_t>(RetroScene::Count);
+  std::array<uint32_t, sceneCount> firstHashes = {};
+  for (uint8_t scene = 0; scene < sceneCount; ++scene) {
     renderRetroScene(canvas, static_cast<RetroScene>(scene), 0);
     firstHashes[scene] = frameHash(canvas);
     for (uint8_t other = 0; other < scene; ++other) assert(firstHashes[scene] != firstHashes[other]);
     for (uint32_t t = 0; t < kRetroSceneDurationMs; t += 33) {
       renderRetroScene(canvas, static_cast<RetroScene>(scene), t);
-      assert(countColor(canvas, 0) < 4096 - 50);
-      for (uint16_t color : canvas.pixels) {
-        bool found = false;
-        for (uint16_t allowed : kRetroPalette) found |= color == allowed;
-        assert(found);
-      }
+      assert(countColor(canvas, kBlack) < 4096 - 50);
     }
     renderRetroScene(canvas, static_cast<RetroScene>(scene), 420);
     assert(frameHash(canvas) != firstHashes[scene]);
@@ -116,27 +169,39 @@ static void checkSprites() {
     assert(frameHash(canvas) == last);
   }
   renderRetroScene(canvas, RetroScene::Mario, 2700);
-  assert(canvas.pixels[28 * 64 + 30] != 0);
+  assert(canvas.pixels[0] == kBlack && countColor(canvas, kSpriteBlack) > 20);
+  assert(countColor(canvas, kMarioPalette[1]) > 30);
   renderRetroScene(canvas, RetroScene::PacMan, 0);
-  for (uint8_t color : {1, 8, 7, 12}) assert(countColor(canvas, color) >= 40);
-  assert(canvas.pixels[30 * 64 + 58] == kRetroPalette[15]);
+  uint32_t pacFirstFrame = frameHash(canvas);
+  renderRetroScene(canvas, RetroScene::PacMan, kPacManFrameMs - 1);
+  assert(frameHash(canvas) == pacFirstFrame);
+  renderRetroScene(canvas, RetroScene::PacMan, kPacManFrameMs);
+  assert(frameHash(canvas) != pacFirstFrame);
+  renderRetroScene(canvas, RetroScene::PacMan, 0);
+  for (uint16_t color : {kGhostPalette[1], kPinkyPalette[1], kInkyPalette[1], kClydePalette[1]})
+    assert(countColor(canvas, color) > 20);
+  assert(countColor(canvas, kPacDot) > 0);
   renderRetroScene(canvas, RetroScene::PacMan, 3200);
-  for (uint8_t color : {1, 8, 12}) assert(countColor(canvas, color) == 0);
-  assert(canvas.pixels[30 * 64 + 58] != kRetroPalette[15]);
+  for (uint16_t color : {kGhostPalette[1], kPinkyPalette[1], kInkyPalette[1], kClydePalette[1]})
+    assert(countColor(canvas, color) == 0);
+  assert(canvas.pixels[30 * 64 + 60] != kPacDot);
   renderRetroScene(canvas, RetroScene::Kirby, 0);
-  assert(countColor(canvas, 8) > 150 && countColor(canvas, 5) > 70);
-  renderRetroScene(canvas, RetroScene::MegaMan, 0);
-  assert(canvas.pixels[2 * 64 + 17] == kRetroPalette[4]);
+  assert(canvas.pixels[63] == kBlack && countColor(canvas, kSpriteBlack) > 20);
+  assert(countColor(canvas, kKirbyPalette[3]) > 50 && countColor(canvas, kKirbyStarPalette[2]) > 100);
+  renderRetroScene(canvas, RetroScene::MegaMan, 600);
+  assert(canvas.pixels[63] == kBlack && countColor(canvas, kSpriteBlack) > 20);
+  assert(countColor(canvas, kMegaManTeleportPalette[2]) > 20);
+  assert(canvas.pixels[28 * 64 + 15] == kBlack);
   renderRetroScene(canvas, RetroScene::MegaMan, 4250);
-  assert(countColor(canvas, 5) > 0);
-  renderRetroScene(canvas, RetroScene::MegaMan, 6500);
-  assert(countColor(canvas, 5) == 0 && countColor(canvas, 7) > 50);
-  renderRetroScene(canvas, RetroScene::DuckHunt, 0);
-  assert(countColor(canvas, 3) > 40);
+  assert(countColor(canvas, kMegaManPalette[2]) > 40);
+  assert(canvas.pixels[41 * 64 + 57] == kMegaManPalette[2]);
+  renderRetroScene(canvas, RetroScene::DuckHunt, 1000);
+  assert(canvas.pixels[63] == kBlack && countColor(canvas, kSpriteBlack) > 20);
+  assert(countColor(canvas, kDuckPalette[1]) > 20);
   renderRetroScene(canvas, RetroScene::DuckHunt, 4300);
-  assert(countColor(canvas, 3) == 0);
+  assert(countColor(canvas, kDuckPalette[1]) == 0);
   renderRetroScene(canvas, RetroScene::DuckHunt, 6000);
-  assert(countColor(canvas, 12) > 80 && countColor(canvas, 15) > 20);
+  assert(countColor(canvas, kDogPalette[2]) > 200 && countColor(canvas, kDogPalette[3]) > 100);
 }
 
 static void checkPanelMatchesScene() {
